@@ -1,8 +1,6 @@
 __pycache__/
 *.pyc
-.venv/
 .pytest_cache/
-data/
-*.db
-.env
-config/settings.yaml
+*.egg-info/
+dist/
+build/
