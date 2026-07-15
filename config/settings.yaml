@@ -1,8 +1,16 @@
 # AI 漫剧生成助手 — 配置文件
 # 所有值均可通过同名环境变量覆盖（前缀 AICOMIC_）
 
+# 后端选择: "deepseek" (默认) 或 "claude"
+backend: "deepseek"
+
+deepseek:
+  api_key: ""                    # 或环境变量 DEEPSEEK_API_KEY
+  model: "deepseek-chat"        # deepseek-chat (V3) 或 deepseek-reasoner (R1)
+  base_url: "https://api.deepseek.com"
+
 anthropic:
-  api_key: ""          # 或环境变量 ANTHROPIC_API_KEY
+  api_key: ""                    # 或环境变量 ANTHROPIC_API_KEY
   model: "claude-sonnet-5-20251001"
 
 database:

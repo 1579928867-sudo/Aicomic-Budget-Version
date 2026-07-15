@@ -2,7 +2,8 @@
 
 Usage:
     python -m aicomic run chapter.txt
-    python -m aicomic run chapter.txt --db data/aicomic.db
+    python -m aicomic run chapter.txt --backend deepseek
+    python -m aicomic run chapter.txt --backend claude
 """
 
 import argparse
@@ -20,10 +21,14 @@ def _load_config(config_path: Path) -> dict:
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f) or {}
 
-    # Env var overrides (AICOMIC_ prefix)
-    env_api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("AICOMIC_ANTHROPIC_API_KEY")
-    if env_api_key:
-        config.setdefault("anthropic", {})["api_key"] = env_api_key
+    # Env var overrides
+    for key, env_var in [
+        ("deepseek", "DEEPSEEK_API_KEY"),
+        ("anthropic", "ANTHROPIC_API_KEY"),
+    ]:
+        env_val = os.environ.get(env_var) or os.environ.get(f"AICOMIC_{env_var}")
+        if env_val:
+            config.setdefault(key, {})["api_key"] = env_val
 
     env_db_path = os.environ.get("AICOMIC_DATABASE_PATH")
     if env_db_path:
@@ -39,24 +44,55 @@ def _resolve_db_path(cli_db: Path | None, config: dict) -> Path:
     return Path(db_path_str).resolve()
 
 
-def _resolve_api_key(config: dict) -> str:
-    api_key = config.get("anthropic", {}).get("api_key", "")
-    if not api_key:
+def _resolve_backend(cli_backend: str | None, config: dict) -> str:
+    if cli_backend:
+        return cli_backend
+    return config.get("backend", "deepseek")
+
+
+def _get_api_key(backend: str, config: dict) -> str:
+    key = config.get(backend, {}).get("api_key", "")
+    if not key:
+        env_map = {"deepseek": "DEEPSEEK_API_KEY", "claude": "ANTHROPIC_API_KEY"}
         print(
-            "Error: Claude API key not found. Set ANTHROPIC_API_KEY env var "
-            "or add anthropic.api_key to config/settings.yaml",
+            f"Error: {backend} API key not found. "
+            f"Set {env_map.get(backend, 'API_KEY')} env var "
+            f"or add {backend}.api_key to config/settings.yaml",
             file=sys.stderr,
         )
         sys.exit(1)
-    return api_key
+    return key
+
+
+def _build_llm_client(backend: str, config: dict):
+    """Build the LLM client based on backend choice."""
+    api_key = _get_api_key(backend, config)
+    backend_config = config.get(backend, {})
+
+    if backend == "deepseek":
+        from .llm.deepseek import DeepSeekClient
+
+        return DeepSeekClient(
+            api_key=api_key,
+            model=backend_config.get("model", "deepseek-chat"),
+            base_url=backend_config.get("base_url", "https://api.deepseek.com"),
+        )
+    elif backend == "claude":
+        from .llm.claude import ClaudeClient
+
+        return ClaudeClient(
+            api_key=api_key,
+            model=backend_config.get("model", "claude-sonnet-5-20251001"),
+        )
+    else:
+        print(f"Error: Unknown backend '{backend}'. Use 'deepseek' or 'claude'.", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_run(args: argparse.Namespace, config: dict):
     """Handle the 'run' subcommand."""
-    from .interface import AgentResult
     from .db.repository import Database
     from .bus import AgentBus
-    from .llm.claude import ClaudeClient
     from .agents.screenwriter import ScreenwriterAgent
     from .orchestrator import Orchestrator
 
@@ -71,10 +107,9 @@ def cmd_run(args: argparse.Namespace, config: dict):
         sys.exit(1)
 
     db_path = _resolve_db_path(args.db, config)
+    backend = _resolve_backend(args.backend, config)
 
-    # ── Setup ──
-    api_key = _resolve_api_key(config)
-    model = config.get("anthropic", {}).get("model", "claude-sonnet-5-20251001")
+    print(f"Backend: {backend}")
 
     db = Database(db_path)
     db.connect()
@@ -91,8 +126,8 @@ def cmd_run(args: argparse.Namespace, config: dict):
         print(f"Novel created (id={novel_id}), Chapter created (id={chapter_id})")
 
         # ── Wire up agents ──
-        claude = ClaudeClient(api_key=api_key, model=model)
-        screenwriter = ScreenwriterAgent(llm_client=claude)
+        llm = _build_llm_client(backend, config)
+        screenwriter = ScreenwriterAgent(llm_client=llm)
 
         bus = AgentBus()
         bus.register(screenwriter)
@@ -130,6 +165,13 @@ def main():
         "file",
         type=Path,
         help="Path to chapter text file (.txt)",
+    )
+    run_parser.add_argument(
+        "--backend",
+        type=str,
+        choices=["deepseek", "claude"],
+        default=None,
+        help="LLM backend: deepseek (default) or claude",
     )
     run_parser.add_argument(
         "--db",
