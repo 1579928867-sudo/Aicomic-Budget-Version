@@ -99,7 +99,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
     from .agents.shot_visualizer import ShotVisualizerAgent
     from .agents.video_generator import VideoGeneratorAgent
     from .agents.video_composer import VideoComposerAgent
-    from .doubao.client import MockVideoGenerator
+    from .doubao.client import MockVideoGenerator, DoubaoVideoGenerator
     from .orchestrator import Orchestrator
 
     chapter_file: Path = args.file
@@ -147,10 +147,26 @@ def cmd_run(args: argparse.Namespace, config: dict):
 
         with_video = getattr(args, "with_video", False)
         if with_video:
+            video_cfg = config.get("video", {})
             video_output_dir = Path(
-                config.get("video", {}).get("output_dir", "data/videos")
+                video_cfg.get("output_dir", "data/videos")
             )
-            video_gen = MockVideoGenerator(output_dir=video_output_dir)
+            video_backend = getattr(args, "video_backend", None) or video_cfg.get("generator", "mock")
+
+            if video_backend == "doubao":
+                doubao_cfg = config.get("doubao", {})
+                video_gen = DoubaoVideoGenerator(
+                    cookie_file=Path(doubao_cfg.get("cookie_file", "data/doubao_cookies.json")),
+                    headless=doubao_cfg.get("headless", True),
+                    output_dir=str(video_output_dir),
+                    timeout_sec=doubao_cfg.get("timeout_sec", 300),
+                    poll_interval_sec=doubao_cfg.get("poll_interval_sec", 3),
+                    video_page_url=doubao_cfg.get("video_page_url", "https://jimeng.jianying.com/ai-tool/video/generate"),
+                    selectors=doubao_cfg.get("selectors", {}),
+                )
+            else:
+                video_gen = MockVideoGenerator(output_dir=video_output_dir)
+
             video_agent = VideoGeneratorAgent(llm_client=llm, video_generator=video_gen)
             bus.register(video_agent)
 
@@ -227,6 +243,13 @@ def main():
         action="store_true",
         default=False,
         help="Also generate video clips via VideoGenerator (default: off, expensive)",
+    )
+    run_parser.add_argument(
+        "--video-backend",
+        type=str,
+        choices=["mock", "doubao"],
+        default=None,
+        help="Video generator backend: mock (default, safe) or doubao (real generation)",
     )
 
     args = parser.parse_args()

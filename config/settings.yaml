@@ -19,6 +19,22 @@ database:
 doubao:
   cookie_file: "data/doubao_cookies.json"
   headless: true
+  timeout_sec: 300
+  poll_interval_sec: 3
+  output_dir: "data/videos/"
+  video_page_url: "https://jimeng.jianying.com/ai-tool/video/generate"
+  selectors:
+    prompt_input: "textarea[placeholder*='描述']"
+    generate_button: "button:has-text('生成')"
+    generating_indicator: "[class*='generating']"
+    status_done: "[class*='success']"
+    status_failed: "[class*='error']"
+    video_result: "video"
+    download_button: "[class*='download']"
+
+video:
+  generator: "mock"               # mock | doubao — which VideoGenerator to use
+  output_dir: "data/videos/"       # where generated video clips are saved
 
 logging:
   level: "INFO"
