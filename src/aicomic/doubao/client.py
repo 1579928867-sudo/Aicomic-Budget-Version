@@ -252,8 +252,13 @@ class DoubaoVideoGenerator(VideoGenerator):
             finally:
                 page.close()
 
-        except CookieExpiredError:
-            raise
+        except CookieExpiredError as e:
+            return VideoResult(
+                success=False,
+                file_path="",
+                duration_sec=0,
+                error=f"Cookie expired: {e}",
+            )
         except Exception as e:
             return VideoResult(
                 success=False,
@@ -266,7 +271,6 @@ class DoubaoVideoGenerator(VideoGenerator):
         """Poll for video generation completion. Returns video URL or None."""
         import time
 
-        done_selector = self.selectors.get("status_done", "[class*='success']")
         failed_selector = self.selectors.get("status_failed", "[class*='error']")
         video_selector = self.selectors.get("video_result", "video")
         generating_selector = self.selectors.get(
