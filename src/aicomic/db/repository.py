@@ -256,6 +256,15 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def create_final_video(self, chapter_id: int, file_path: str) -> int:
+        """Create a final_video row. Returns the new final video id."""
+        cursor = self.conn.execute(
+            "INSERT INTO final_video (chapter_id, file_path) VALUES (?, ?)",
+            (chapter_id, file_path),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
     def get_video_clips(self, script_id: int) -> list[dict]:
         """Get all video_clip rows for a script, joined via storyboard_shot."""
         rows = self.conn.execute(
