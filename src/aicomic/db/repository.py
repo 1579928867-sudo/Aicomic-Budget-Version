@@ -68,6 +68,7 @@ class Database:
                 duration_sec REAL NOT NULL DEFAULT 8.0,
                 char_ids TEXT DEFAULT '[]',
                 scene_id INTEGER,
+                image_prompt TEXT DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -132,6 +133,22 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        self.conn.commit()
+
+    def migrate_schema(self):
+        """Run idempotent migrations for schema upgrades (v0.2 → v0.3, etc.)."""
+        if not self.conn:
+            raise RuntimeError("Database not connected. Call connect() first.")
+
+        migrations = [
+            # v0.3: add image_prompt column to storyboard_shot
+            "ALTER TABLE storyboard_shot ADD COLUMN image_prompt TEXT DEFAULT ''",
+        ]
+        for sql in migrations:
+            try:
+                self.conn.execute(sql)
+            except Exception:
+                pass  # column already exists
         self.conn.commit()
 
     # ── Novel ──
@@ -208,6 +225,45 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def update_shot_image_prompt(self, shot_id: int, image_prompt: str):
+        """Update the image_prompt field on a storyboard shot."""
+        self.conn.execute(
+            "UPDATE storyboard_shot SET image_prompt = ? WHERE id = ?",
+            (image_prompt, shot_id),
+        )
+        self.conn.commit()
+
+    # ── Video Clips ──
+
+    def create_video_clip(self, shot_id: int, file_path: str, duration_sec: float) -> int:
+        """Create a video_clip row. Returns the new clip id."""
+        cursor = self.conn.execute(
+            """INSERT INTO video_clip (shot_id, file_path, status)
+               VALUES (?, ?, 'done')""",
+            (shot_id, file_path),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_video_clips_for_shot(self, shot_id: int) -> list[dict]:
+        """Get all video_clip rows for a given shot (used for idempotency)."""
+        rows = self.conn.execute(
+            "SELECT * FROM video_clip WHERE shot_id = ? ORDER BY id",
+            (shot_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_video_clips(self, script_id: int) -> list[dict]:
+        """Get all video_clip rows for a script, joined via storyboard_shot."""
+        rows = self.conn.execute(
+            """SELECT vc.* FROM video_clip vc
+               JOIN storyboard_shot ss ON vc.shot_id = ss.id
+               WHERE ss.script_id = ?
+               ORDER BY ss.shot_num""",
+            (script_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     # ── Character ──
 
     def get_or_create_character(self, name: str) -> tuple[int, bool]:
@@ -237,6 +293,84 @@ class Database:
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def update_scene_card(
+        self,
+        scene_id: int,
+        description: str,
+        lighting: str,
+        style: str,
+        wide_view: str = "",
+        mid_view: str = "",
+        close_view: str = "",
+    ):
+        """Update scene_card with generated descriptions and multi-angle view prompts."""
+        self.conn.execute(
+            """UPDATE scene_card
+               SET description = ?, lighting = ?, style = ?,
+                   wide_view = ?, mid_view = ?, close_view = ?,
+                   status = 'done'
+               WHERE id = ?""",
+            (description, lighting, style, wide_view, mid_view, close_view, scene_id),
+        )
+        self.conn.commit()
+
+    def get_scene_by_name(self, chapter_id: int, name: str) -> dict | None:
+        """Get scene_card row by name (scenes are global, not chapter-scoped)."""
+        row = self.conn.execute(
+            "SELECT * FROM scene_card WHERE name = ?", (name,)
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    # ── Appearance Variants ──
+
+    def get_character_variants(self, character_id: int) -> list[dict]:
+        """Get all existing appearance variants for a character."""
+        rows = self.conn.execute(
+            """SELECT * FROM appearance_variant
+               WHERE character_id = ? ORDER BY id""",
+            (character_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_appearance_variant(
+        self,
+        character_id: int,
+        variant_name: str,
+        variant_type: str,
+        appearance_json: str,
+    ) -> int:
+        """Create an appearance_variant row. Returns the new variant id."""
+        cursor = self.conn.execute(
+            """INSERT INTO appearance_variant
+               (character_id, variant_name, type, appearance_json, status)
+               VALUES (?, ?, ?, ?, 'done')""",
+            (character_id, variant_name, variant_type, appearance_json),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def update_appearance_variant_views(
+        self, variant_id: int, front: str, side: str, back: str
+    ):
+        """Update front/side/back view prompts on an appearance variant."""
+        self.conn.execute(
+            """UPDATE appearance_variant
+               SET front_view = ?, side_view = ?, back_view = ?
+               WHERE id = ?""",
+            (front, side, back, variant_id),
+        )
+        self.conn.commit()
+
+    def set_character_default_look(self, character_id: int, variant_id: int):
+        """Set the default_look_id on a character_card."""
+        self.conn.execute(
+            "UPDATE character_card SET default_look_id = ? WHERE id = ?",
+            (variant_id, character_id),
+        )
+        self.conn.commit()
 
     # ── Agent Status (幂等性基础) ──
 

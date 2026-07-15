@@ -149,3 +149,93 @@ def test_task_log(db):
     assert row is not None
     assert row["event"] == "script_generated"
     assert row["level"] == "INFO"
+
+
+def test_migrate_schema_adds_image_prompt_column(db):
+    """v0.3 migration: ALTER TABLE storyboard_shot ADD COLUMN image_prompt."""
+    db.migrate_schema()
+
+    # Verify the column exists
+    cols = db.conn.execute("PRAGMA table_info(storyboard_shot)").fetchall()
+    col_names = [c["name"] for c in cols]
+    assert "image_prompt" in col_names
+
+    # Verify idempotent: can call again without error
+    db.migrate_schema()
+
+
+def test_update_appearance_variant_views(db):
+    """新增方法: 回填 appearance_variant 的 front/side/back_view 列."""
+    novel_id = db.create_novel("测试", "")
+    chapter_id = db.create_chapter(novel_id, 1, "内容")
+    char_id, _ = db.get_or_create_character("叶凡")
+    variant_id = db.create_appearance_variant(
+        character_id=char_id,
+        variant_name="default",
+        variant_type="default",
+        appearance_json='{"full_prompt": "test"}',
+    )
+
+    db.update_appearance_variant_views(
+        variant_id=variant_id,
+        front="正面视图prompt",
+        side="侧面视图prompt",
+        back="背面视图prompt",
+    )
+
+    # Verify columns populated
+    row = db.conn.execute(
+        "SELECT front_view, side_view, back_view FROM appearance_variant WHERE id = ?",
+        (variant_id,),
+    ).fetchone()
+    assert row["front_view"] == "正面视图prompt"
+    assert row["side_view"] == "侧面视图prompt"
+    assert row["back_view"] == "背面视图prompt"
+
+
+def test_update_scene_card_with_views(db):
+    """update_scene_card 现在接受 6 个字段，包括 wide/mid/close_view."""
+    scene_id = db.get_or_create_scene("山门")
+    db.update_scene_card(
+        scene_id=scene_id,
+        description="巍峨山门",
+        lighting="晨光金色",
+        style="中式仙侠",
+        wide_view="全景广角视图prompt",
+        mid_view="中景核心区域prompt",
+        close_view="特写细节prompt",
+    )
+
+    row = db.conn.execute(
+        "SELECT * FROM scene_card WHERE id = ?", (scene_id,)
+    ).fetchone()
+    assert row["description"] == "巍峨山门"
+    assert row["lighting"] == "晨光金色"
+    assert row["style"] == "中式仙侠"
+    assert row["wide_view"] == "全景广角视图prompt"
+    assert row["mid_view"] == "中景核心区域prompt"
+    assert row["close_view"] == "特写细节prompt"
+    assert row["status"] == "done"
+
+
+def test_update_shot_image_prompt(db):
+    """Update image_prompt field on a storyboard shot."""
+    db.migrate_schema()
+
+    # Set up: create a novel, chapter, script, and a shot
+    novel_id = db.create_novel("测试", "")
+    chapter_id = db.create_chapter(novel_id, 1, "内容")
+    script_id = db.save_script(chapter_id, {"scenes": [], "characters": [], "scenes_list": []})
+    shot_ids = db.save_storyboard_shots(script_id, [{
+        "shot_num": 1, "narration": "", "dialogue": "",
+        "camera_movement": "MS", "duration_sec": 5.0,
+        "char_ids": [], "scene_id": None,
+    }])
+
+    # Update the image prompt
+    prompt = "古代仙侠风格，16:9横版构图，测试画面提示词..."
+    db.update_shot_image_prompt(shot_ids[0], prompt)
+
+    # Verify it was saved
+    shots = db.get_storyboard_shots(script_id)
+    assert shots[0]["image_prompt"] == prompt
