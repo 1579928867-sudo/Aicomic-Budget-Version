@@ -112,6 +112,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 shot_id INTEGER NOT NULL REFERENCES storyboard_shot(id),
                 file_path TEXT NOT NULL DEFAULT '',
+                duration_sec REAL NOT NULL DEFAULT 0.0,
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -143,11 +144,13 @@ class Database:
         migrations = [
             # v0.3: add image_prompt column to storyboard_shot
             "ALTER TABLE storyboard_shot ADD COLUMN image_prompt TEXT DEFAULT ''",
+            # v0.4: add duration_sec column to video_clip
+            "ALTER TABLE video_clip ADD COLUMN duration_sec REAL NOT NULL DEFAULT 0.0",
         ]
         for sql in migrations:
             try:
                 self.conn.execute(sql)
-            except Exception:
+            except sqlite3.OperationalError:
                 pass  # column already exists
         self.conn.commit()
 
@@ -238,9 +241,9 @@ class Database:
     def create_video_clip(self, shot_id: int, file_path: str, duration_sec: float) -> int:
         """Create a video_clip row. Returns the new clip id."""
         cursor = self.conn.execute(
-            """INSERT INTO video_clip (shot_id, file_path, status)
-               VALUES (?, ?, 'done')""",
-            (shot_id, file_path),
+            """INSERT INTO video_clip (shot_id, file_path, duration_sec, status)
+               VALUES (?, ?, ?, 'done')""",
+            (shot_id, file_path, duration_sec),
         )
         self.conn.commit()
         return cursor.lastrowid
