@@ -239,3 +239,19 @@ def test_update_shot_image_prompt(db):
     # Verify it was saved
     shots = db.get_storyboard_shots(script_id)
     assert shots[0]["image_prompt"] == prompt
+
+
+def test_create_final_video(db):
+    """创建 final_video 行并返回 id."""
+    novel_id = db.create_novel("测试", "")
+    chapter_id = db.create_chapter(novel_id, 1, "内容")
+
+    fv_id = db.create_final_video(chapter_id, "data/videos/final_1.mp4")
+    assert fv_id == 1
+
+    row = db.conn.execute(
+        "SELECT * FROM final_video WHERE id = ?", (fv_id,)
+    ).fetchone()
+    assert row is not None
+    assert row["chapter_id"] == chapter_id
+    assert row["file_path"] == "data/videos/final_1.mp4"
