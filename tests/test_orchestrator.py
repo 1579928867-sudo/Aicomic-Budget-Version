@@ -103,13 +103,34 @@ class _FakeVideoGenerator(AgentInterface):
         )
 
 
-def _register_all_agents(bus: AgentBus):
-    """Register all 5 fake agents for v0.4 pipeline."""
+class _FakeVideoComposer(AgentInterface):
+    agent_name = "video-composer"
+
+    def validate_input(self, input_data: dict) -> bool:
+        return "chapter_id" in input_data and "script_id" in input_data
+
+    def execute(self, input_data: dict, db) -> AgentResult:
+        chapter_id = input_data["chapter_id"]
+        db.set_agent_status(self.agent_name, chapter_id, "done")
+        return AgentResult(
+            success=True,
+            data={
+                "final_video_path": "data/videos/final_1.mp4",
+                "clip_count": 14,
+                "total_duration": 70.0,
+            },
+        )
+
+
+def _register_all_agents(bus: AgentBus, with_video_composer: bool = False):
+    """Register all 5 (or 6) fake agents."""
     bus.register(_FakeScreenwriter())
     bus.register(_FakeCharDesigner())
     bus.register(_FakeSceneDesigner())
     bus.register(_FakeShotVisualizer())
     bus.register(_FakeVideoGenerator())
+    if with_video_composer:
+        bus.register(_FakeVideoComposer())
 
 
 def test_orchestrator_run_chapter_success():
@@ -508,6 +529,36 @@ def test_full_pipeline_integration():
         log_events = [l["event"] for l in logs]
         assert "pipeline_started" in log_events
         assert "pipeline_completed" in log_events
+    finally:
+        db.close()
+        db_path.unlink()
+
+
+def test_orchestrator_run_chapter_with_video_and_composer():
+    """v0.5: with_video=True should also run Video Composer."""
+    bus = AgentBus()
+    _register_all_agents(bus, with_video_composer=True)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    db_path = Path(tmp.name)
+    db = Database(db_path)
+    db.connect()
+    db.init_schema()
+
+    try:
+        novel_id = db.create_novel("测试", "")
+        chapter_id = db.create_chapter(novel_id, 1, "内容")
+
+        orchestrator = Orchestrator(bus, db)
+        result = orchestrator.run_chapter(chapter_id, "内容", with_video=True)
+
+        assert result.success is True
+        assert result.data["clips_created"] == 14
+        # v0.5: composer data
+        assert result.data.get("final_video_path") is not None
+        assert result.data.get("clip_count") == 14
+        assert db.get_agent_status("video-composer", chapter_id) == "done"
     finally:
         db.close()
         db_path.unlink()

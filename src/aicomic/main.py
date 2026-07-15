@@ -94,6 +94,12 @@ def cmd_run(args: argparse.Namespace, config: dict):
     from .db.repository import Database
     from .bus import AgentBus
     from .agents.screenwriter import ScreenwriterAgent
+    from .agents.char_designer import CharacterDesignerAgent
+    from .agents.scene_designer import SceneDesignerAgent
+    from .agents.shot_visualizer import ShotVisualizerAgent
+    from .agents.video_generator import VideoGeneratorAgent
+    from .agents.video_composer import VideoComposerAgent
+    from .doubao.client import MockVideoGenerator
     from .orchestrator import Orchestrator
 
     chapter_file: Path = args.file
@@ -114,6 +120,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
     db = Database(db_path)
     db.connect()
     db.init_schema()
+    db.migrate_schema()
 
     try:
         # ── Scaffold novel + chapter in DB ──
@@ -128,15 +135,37 @@ def cmd_run(args: argparse.Namespace, config: dict):
         # ── Wire up agents ──
         llm = _build_llm_client(backend, config)
         screenwriter = ScreenwriterAgent(llm_client=llm)
+        char_designer = CharacterDesignerAgent(llm_client=llm)
+        scene_designer = SceneDesignerAgent(llm_client=llm)
+        shot_visualizer = ShotVisualizerAgent(llm_client=llm)
 
         bus = AgentBus()
         bus.register(screenwriter)
+        bus.register(char_designer)
+        bus.register(scene_designer)
+        bus.register(shot_visualizer)
+
+        with_video = getattr(args, "with_video", False)
+        if with_video:
+            video_output_dir = Path(
+                config.get("video", {}).get("output_dir", "data/videos")
+            )
+            video_gen = MockVideoGenerator(output_dir=video_output_dir)
+            video_agent = VideoGeneratorAgent(llm_client=llm, video_generator=video_gen)
+            bus.register(video_agent)
+
+            # v0.5: Video Composer
+            composer_output_dir = str(video_output_dir)
+            video_composer = VideoComposerAgent(output_dir=composer_output_dir)
+            bus.register(video_composer)
 
         orchestrator = Orchestrator(bus, db)
 
         # ── Run ──
-        print("Running pipeline...")
-        result = orchestrator.run_chapter(chapter_id, raw_text)
+        pipeline_label = "v0.5" if with_video else "v0.5"
+        print(f"Running pipeline ({pipeline_label}: Screenwriter → CharDesigner → SceneDesigner → ShotVisualizer"
+              + (" → VideoGenerator → VideoComposer)..." if with_video else ")..."))
+        result = orchestrator.run_chapter(chapter_id, raw_text, with_video=with_video)
 
         if result.success:
             print("Pipeline completed successfully!")
@@ -144,6 +173,14 @@ def cmd_run(args: argparse.Namespace, config: dict):
                 print(f"  Script ID: {result.data.get('script_id')}")
                 print(f"  Characters: {result.data.get('characters')}")
                 print(f"  Scenes: {result.data.get('scenes_list')}")
+                print(f"  Char variants created: {result.data.get('char_variants_created', 0)}")
+                print(f"  Scenes updated: {result.data.get('scenes_updated', 0)}")
+                print(f"  Shots visualized: {result.data.get('shots_visualized', 0)}")
+                if with_video:
+                    print(f"  Video clips created: {result.data.get('clips_created', 0)}")
+                    final_path = result.data.get("final_video_path")
+                    if final_path:
+                        print(f"  Final video: {final_path}")
         else:
             print(f"Pipeline failed: {result.error}", file=sys.stderr)
             sys.exit(1)
@@ -184,6 +221,12 @@ def main():
         type=Path,
         default=Path("config/settings.yaml"),
         help="Path to config file (default: config/settings.yaml)",
+    )
+    run_parser.add_argument(
+        "--with-video",
+        action="store_true",
+        default=False,
+        help="Also generate video clips via VideoGenerator (default: off, expensive)",
     )
 
     args = parser.parse_args()
