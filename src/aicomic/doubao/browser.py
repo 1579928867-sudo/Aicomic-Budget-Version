@@ -157,8 +157,24 @@ class DoubaoBrowserClient:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
             headless=self.headless,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ],
         )
-        self._context = self._browser.new_context()
+        self._context = self._browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/130.0.0.0 Safari/537.36"
+            ),
+        )
+        # Remove navigator.webdriver flag
+        self._context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        """)
 
         if self._cookies:
             self._context.add_cookies(self._cookies)

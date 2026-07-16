@@ -22,7 +22,7 @@ def main():
 
     client = DoubaoBrowserClient(
         cookie_file=cookie_file,
-        headless=True,              # No visible browser window
+        headless=False,             # Show browser for debugging
         output_dir="data/",
         timeout_sec=300,            # 5 min max wait
         poll_interval_sec=3,
