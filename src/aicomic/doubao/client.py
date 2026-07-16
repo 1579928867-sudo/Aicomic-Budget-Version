@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import time
 import uuid
+from . import CookieExpiredError
 
 
 @dataclass
@@ -89,11 +90,6 @@ class MockVideoGenerator(VideoGenerator):
             duration_sec=duration_sec,
             metadata={"generator": "mock", "clip_id": clip_id},
         )
-
-
-class CookieExpiredError(Exception):
-    """Raised when Doubao cookies are expired and user needs to re-export."""
-    pass
 
 
 class DoubaoVideoGenerator(VideoGenerator):

@@ -29,9 +29,7 @@ class ImageResult:
     error: str | None = None
 
 
-class CookieExpiredError(Exception):
-    """Raised when Doubao cookies are expired and user needs to re-export."""
-    pass
+from . import CookieExpiredError
 
 
 # Default selectors — these are placeholders until Task 6 calibration
@@ -108,7 +106,7 @@ class DoubaoBrowserClient:
 
         # Page URLs (allow override via selectors dict's special key)
         self.page_urls = _DEFAULT_PAGES.copy()
-        page_overrides = selectors.pop("_pages", {}) if selectors else {}
+        page_overrides = (selectors or {}).get("_pages", {})
         self.page_urls.update(page_overrides)
 
         # Load cookies
@@ -257,7 +255,7 @@ class DoubaoBrowserClient:
                 output_path = str(self.output_dir / "images" / f"doubao_{img_id}.png")
                 Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-                self._download_file(page, image_url, output_path)
+                self._download_file(image_url, output_path)
 
                 return ImageResult(
                     success=True,
@@ -343,7 +341,7 @@ class DoubaoBrowserClient:
                 clip_id = uuid.uuid4().hex[:8]
                 output_path = str(video_dir / f"doubao_{clip_id}.mp4")
 
-                self._download_file(page, video_url, output_path)
+                self._download_file(video_url, output_path)
 
                 return VideoResult(
                     success=True,
@@ -358,7 +356,6 @@ class DoubaoBrowserClient:
         except CookieExpiredError:
             raise
         except Exception as e:
-            from ..doubao.client import VideoResult
             return VideoResult(
                 success=False,
                 file_path="",
@@ -415,7 +412,7 @@ class DoubaoBrowserClient:
 
         return None
 
-    def _download_file(self, page, file_url: str, output_path: str):
+    def _download_file(self, file_url: str, output_path: str):
         """Download a file from URL to local path using browser cookies for auth."""
         import requests
 

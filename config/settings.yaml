@@ -23,6 +23,9 @@ doubao:
   poll_interval_sec: 3
   rate_limit_sec: 10
   output_dir: "data/"
+  # Backward compat: flat selectors for DoubaoVideoGenerator (pre-v0.6 path)
+  video_page_url: "https://jimeng.jianying.com/ai-tool/video/generate"
+  # v0.6+ nested selectors structure
   pages:
     image: "https://www.doubao.com/chat/create-image"
     video: "https://www.doubao.com/chat/create-video"
