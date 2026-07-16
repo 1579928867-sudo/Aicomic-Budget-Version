@@ -230,8 +230,8 @@ class DoubaoBrowserClient:
                 sel = self.selectors["image"]
 
                 # ── 1. Navigate to image generation page ──
-                page.goto(self.page_urls["image"], wait_until="domcontentloaded")
-                page.wait_for_load_state("networkidle")
+                page.set_default_timeout(self.timeout_sec * 1000)
+                page.goto(self.page_urls["image"], wait_until="domcontentloaded", timeout=60000)
 
                 # ── 2. Check for cookie expiration ──
                 if "login" in page.url.lower() or "passport" in page.url.lower():
