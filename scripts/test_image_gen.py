@@ -2,7 +2,7 @@
 """Quick smoke test: generate one image via Doubao (real).
 
 Usage (run from project root):
-    C:\Users\w\AppData\Local\Programs\Python\Python312\python.exe scripts\test_image_gen.py
+    python scripts/test_image_gen.py
 """
 
 import sys
