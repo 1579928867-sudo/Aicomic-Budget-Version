@@ -279,8 +279,6 @@ def test_migrate_schema_adds_image_columns(db):
 
 def test_update_appearance_variant_image(db):
     """回填 appearance_variant 的 {view}_image 列."""
-    novel_id = db.create_novel("测试", "")
-    chapter_id = db.create_chapter(novel_id, 1, "内容")
     char_id, _ = db.get_or_create_character("叶凡")
     variant_id = db.create_appearance_variant(
         character_id=char_id,
@@ -301,6 +299,22 @@ def test_update_appearance_variant_image(db):
     assert row["front_image"] == "data/images/front_1.png"
     assert row["side_image"] == "data/images/side_1.png"
     assert row["back_image"] == "data/images/back_1.png"
+
+
+def test_update_appearance_variant_image_invalid_view(db):
+    """Invalid view name should raise ValueError."""
+    char_id, _ = db.get_or_create_character("测试")
+    variant_id = db.create_appearance_variant(
+        character_id=char_id,
+        variant_name="default",
+        variant_type="default",
+        appearance_json='{"full_prompt": "test"}',
+    )
+    db.migrate_schema()
+
+    import pytest
+    with pytest.raises(ValueError, match="Invalid view"):
+        db.update_appearance_variant_image(variant_id, "invalid", "path")
 
 
 def test_update_scene_card_image(db):

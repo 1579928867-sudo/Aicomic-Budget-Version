@@ -10,6 +10,10 @@ import sqlite3
 class Database:
     """SQLite-backed knowledge base for the multi-agent framework."""
 
+    # ── Whitelists for view parameters ──
+    _ALLOWED_APPEARANCE_IMAGE_VIEWS = {"front", "side", "back"}
+    _ALLOWED_SCENE_IMAGE_VIEWS = {"wide", "mid", "close"}
+
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
@@ -388,6 +392,11 @@ class Database:
         self, variant_id: int, view: str, file_path: str
     ):
         """Update {view}_image column on an appearance_variant (front/side/back)."""
+        if view not in self._ALLOWED_APPEARANCE_IMAGE_VIEWS:
+            raise ValueError(
+                f"Invalid view '{view}' for appearance_variant; "
+                f"expected one of {self._ALLOWED_APPEARANCE_IMAGE_VIEWS}"
+            )
         column = f"{view}_image"
         self.conn.execute(
             f"UPDATE appearance_variant SET {column} = ? WHERE id = ?",
@@ -399,6 +408,11 @@ class Database:
         self, scene_id: int, view: str, file_path: str
     ):
         """Update {view}_image column on a scene_card (wide/mid/close)."""
+        if view not in self._ALLOWED_SCENE_IMAGE_VIEWS:
+            raise ValueError(
+                f"Invalid view '{view}' for scene_card; "
+                f"expected one of {self._ALLOWED_SCENE_IMAGE_VIEWS}"
+            )
         column = f"{view}_image"
         self.conn.execute(
             f"UPDATE scene_card SET {column} = ? WHERE id = ?",
