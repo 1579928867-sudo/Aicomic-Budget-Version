@@ -2,7 +2,7 @@
 """Quick smoke test: generate one image via Doubao (real).
 
 Usage (run from project root):
-    python scripts/test_image_gen.py
+    C:\Users\w\AppData\Local\Programs\Python\Python312\python.exe scripts\test_image_gen.py
 """
 
 import sys
@@ -32,7 +32,6 @@ def main():
         print("Starting image generation...")
         print('  Prompt: "一只可爱的橘猫坐在窗台上，阳光洒落"')
         print("  Ratio: 16:9")
-        print()
 
         result = client.generate_image(
             prompt="一只可爱的橘猫坐在窗台上，阳光洒落，写实摄影风格",
@@ -43,6 +42,12 @@ def main():
         if result.success:
             print(f"File:    {result.file_path}")
             print(f"Meta:    {result.metadata}")
+            # Verify file exists
+            p = Path(result.file_path)
+            if p.exists():
+                print(f"Size:    {p.stat().st_size} bytes")
+            else:
+                print("WARNING: File not found on disk!")
         else:
             print(f"Error:   {result.error}")
 
@@ -50,6 +55,7 @@ def main():
         print("Cookies expired! Re-run export_cookies.py to re-login.")
     finally:
         client.close()
+        print("Browser closed.")
 
 
 if __name__ == "__main__":

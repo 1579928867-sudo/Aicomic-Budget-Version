@@ -159,22 +159,9 @@ class DoubaoBrowserClient:
             headless=self.headless,
             args=[
                 "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
             ],
         )
-        self._context = self._browser.new_context(
-            viewport={"width": 1280, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/130.0.0.0 Safari/537.36"
-            ),
-        )
-        # Remove navigator.webdriver flag
-        self._context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-        """)
+        self._context = self._browser.new_context()
 
         if self._cookies:
             self._context.add_cookies(self._cookies)
@@ -281,30 +268,20 @@ class DoubaoBrowserClient:
                     )
 
                 # ── 7. Click download button, intercept browser download ──
-                download_selector = sel.get("download_btn")
-                if not download_selector:
+                download_btn = self._find_download_button(page, sel)
+                if not download_btn:
                     return ImageResult(
                         success=False,
                         file_path="",
-                        error="Download button selector not configured",
-                    )
-
-                try:
-                    page.wait_for_selector(download_selector, timeout=15000)
-                except Exception:
-                    return ImageResult(
-                        success=False,
-                        file_path="",
-                        error="Download button did not appear — generation may have failed",
+                        error="Download button not found — try manual download from browser",
                     )
 
                 # Determine file extension from download
                 output_path = str(img_dir / f"doubao_{img_id}")
                 try:
-                    with page.expect_download(timeout=60000) as download_info:
-                        page.click(download_selector)
+                    with page.expect_download(timeout=120000) as download_info:
+                        download_btn.click()
                     download = download_info.value
-                    # Preserve original extension
                     suggested = Path(download.suggested_filename)
                     output_path = str(img_dir / f"doubao_{img_id}{suggested.suffix}")
                     download.save_as(output_path)
@@ -444,38 +421,104 @@ class DoubaoBrowserClient:
                 error=f"Doubao video generation failed: {e}",
             )
 
+    # ── Private: download button discovery ──
+
+    def _find_download_button(self, page, sel: dict):
+        """Find the download button using multiple fallback strategies.
+
+        Doubao uses hashed class names that change per deployment, so we try
+        several approaches ranked from most-precise to most-generic.
+        """
+        import re
+
+        # Strategy 1: Explicit selector from config (most precise, if calibrated)
+        css = sel.get("download_btn")
+        if css:
+            try:
+                btn = page.wait_for_selector(css, timeout=3000)
+                if btn and btn.is_visible():
+                    return btn
+            except Exception:
+                pass
+
+        # Strategy 2: Button with download-related text or aria-label
+        for selector in [
+            'button[aria-label*="下载" i]',
+            'button[aria-label*="download" i]',
+            'button:has-text("下载")',
+            'button:has-text("Download")',
+        ]:
+            try:
+                btn = page.query_selector(selector)
+                if btn and btn.is_visible():
+                    return btn
+            except Exception:
+                pass
+
+        # Strategy 3: Button containing an SVG/download icon
+        for selector in [
+            'button:has(svg)',
+            'button:has([d^="M"])',  # SVG path icon
+        ]:
+            try:
+                btns = page.query_selector_all(selector)
+                for btn in btns:
+                    if btn.is_visible():
+                        # Check if this button is near the result area (has siblings that look like images)
+                        bbox = btn.bounding_box()
+                        if bbox and bbox["y"] > 300:
+                            return btn
+            except Exception:
+                pass
+
+        # Strategy 4: Last visible button in the result area (most generic fallback)
+        try:
+            # Look for buttons inside the chat/generation result area
+            main_area = page.query_selector("#chat-route-main")
+            if main_area:
+                all_btns = main_area.query_selector_all("button")
+                for btn in reversed(all_btns):
+                    if btn.is_visible():
+                        return btn
+        except Exception:
+            pass
+
+        return None
+
     # ── Private: polling helpers ──
 
     def _poll_for_image_result(self, page, sel: dict) -> bool:
-        """Poll the status container's text for completion / failure keywords.
+        """Poll for image generation completion / failure via page text.
+
+        Since Doubao uses hashed class names, we scan the full page body text
+        for status keywords rather than relying on a specific CSS class.
 
         Returns True if generation completed successfully, False if failed,
         loops until timeout then returns False.
         """
-        container_selector = sel.get("status_container", "div.container-enLQFx")
         done_keywords = sel.get("status_done_keywords", ["已生成", "生成成功"])
         failed_keywords = sel.get("status_failed_keywords", ["无法生成", "生成失败"])
+
+        # Also try the configured container selector as a focused check
+        container_selector = sel.get("status_container", "")
 
         start = time.time()
         while time.time() - start < self.timeout_sec:
             try:
-                container = page.query_selector(container_selector)
-                if container:
-                    text = container.inner_text().strip()
-                    if text:
-                        # Check for failure first
-                        for kw in failed_keywords:
-                            if kw in text:
-                                return False
-                        # Check for completion
-                        for kw in done_keywords:
-                            if kw in text:
-                                return True
-            except Exception:
-                pass
+                # First try the specific container if configured
+                if container_selector:
+                    container = page.query_selector(container_selector)
+                    if container:
+                        text = container.inner_text().strip()
+                        if text:
+                            for kw in failed_keywords:
+                                if kw in text:
+                                    return False
+                            for kw in done_keywords:
+                                if kw in text:
+                                    return True
 
-            # Fallback: check entire page body for status keywords
-            try:
+                # Fallback: scan entire page body text
                 body_text = page.inner_text("body")
                 for kw in failed_keywords:
                     if kw in body_text:
