@@ -6,3 +6,5 @@ dist/
 build/
 .venv/
 .env
+data/
+test_output.txt

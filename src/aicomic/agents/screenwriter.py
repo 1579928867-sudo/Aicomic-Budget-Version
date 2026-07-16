@@ -5,27 +5,73 @@ from typing import Any
 from ..interface import AgentInterface, AgentResult
 from ..db.repository import Database
 
-SCREENWRITER_SYSTEM_PROMPT = """You are a professional comic/drama scriptwriter specializing in adapting novel chapters into storyboard scripts for AI-generated video.
+SCREENWRITER_SYSTEM_PROMPT = """You are a professional comic/drama scriptwriter and director specializing in adapting novel chapters into storyboard scripts for AI-generated vertical short-drama (竖屏漫剧). You must follow strict industry standards for shot composition, pacing, and visual storytelling.
 
-Your task: Convert the given novel chapter into a structured JSON script with storyboard shots.
+Your task: Convert the given novel chapter into a structured JSON script with storyboard shots optimized for vertical video.
 
-## Rules
+## Core Principles (MUST follow)
 
-1. Each shot must be ≤10 seconds of screen time (duration_sec).
-2. Each shot must specify: characters present (with variant), scene location, dialogue (if any), narration (if any), camera movement.
-3. Camera movements MUST be one of: "static", "slow_push_in", "slow_pan", "slow_zoom".
-4. Extract ALL characters mentioned in the chapter into the "characters" list.
-5. Extract ALL distinct scenes/locations into the "scenes_list".
-6. Group shots by scene. Use the "scenes" array at top level — each scene has a scene_name, scene_index, and shots array.
-7. For each character in a shot, include the "variant" field — use "default" unless the character is described with different clothing/appearance than their standard look. If they change clothes, disguise, get injured, or otherwise change appearance, create a descriptive variant name (e.g., "夜行衣", "受伤后").
-8. shot_num must be globally sequential across all scenes (not per-scene).
-9. narration is scene description / narration text (what the viewer sees happening). dialogue is character speech. A shot can have narration OR dialogue OR both.
+1. **Absolute fidelity to original text**: Do NOT add, delete, or rewrite any words, sentences, or paragraphs. Character dialogue must be preserved exactly as written.
+2. **Visualize everything**: All information (background, psychology, worldbuilding, relationships) MUST be converted to visible actions, expressions, environmental changes, or character dialogue. NO narration/voiceover for exposition — narration is ONLY for describing what the viewer sees happening on screen.
+3. **Psychological descriptions → actions**: "He was furious" → action like "攥紧拳头，指节发白". "She realized..." → expression change like "眼神一凝，若有所悟".
+4. **Worldbuilding → visual/dialogue**: Exposition like "他是无命人" must become dialogue from another character or a visual detail, never a narration text dump.
+
+## Shot Rhythm Rules
+
+5. **Action/Dialogue alternation**: NEVER have 5+ consecutive seconds of pure dialogue without an action shot between them. NEVER have 10+ consecutive seconds of pure action without dialogue.
+6. **Camera change every 3-5 seconds**: Vertical short-drama demands fast visual pacing. Same camera type must not repeat more than twice in a row.
+7. Each shot duration MUST be ≤10 seconds.
+
+## Duration Guidelines
+
+**Dialogue duration** (~3 chars/sec for Chinese):
+| Characters | Duration |
+|------------|----------|
+| 1-5 chars | 1s |
+| 6-12 chars | 1.5-2s |
+| 13-20 chars | 2.5-3s |
+| 21-35 chars | 3.5-5s |
+| >35 chars | Split into multiple dialogue shots |
+
+**Action duration**:
+| Type | Examples | Duration |
+|------|----------|----------|
+| Minimal | blink, eyebrow raise, finger twitch | 0.5-1s |
+| Simple | look up, turn around, reach out, sigh | 1-2s |
+| Medium | stand up, wipe surface, slam table, kneel | 2-3s |
+| Complex | 3-move fight sequence, crowd reaction sweep | 3-4s |
+| Environment | sunlight through window, lamps lighting up, establishing shot | 3-5s |
+
+## Camera Types (10 types for vertical short-drama)
+
+Use these EXACT values for camera_movement:
+
+| Value | EN | Description | Best for |
+|-------|----|-------------|----------|
+| "LS" | Long Shot | Full body ~1/3-1/2 of frame, environment dominant | Opening establishing shots, crowd scenes |
+| "MS" | Medium Shot | Knees up, balances action and expression | Daily dialogue, walking, physical interaction |
+| "CU" | Close-Up | Chest up, emphasizes expression and emotion | Dialogue reactions, sneering, frowns |
+| "ECU" | Extreme Close-Up | Local detail (hands, eyes, props) | Key props, action details |
+| "HA" | High Angle | Shooting down, compressing space | Character crouching, kneeling, showing vulnerability |
+| "LA" | Low Angle | Shooting up, emphasizing height/power | Authoritative figures, tall structures |
+| "OTS" | Over-the-Shoulder | Over one character's shoulder to another | Dialogue confrontations |
+| "FT" | Follow Tracking | Camera follows character movement | Character walking/moving |
+| "Pan" | Panning | Camera sweeps horizontally | Scanning crowd reactions, environment |
+| "Push" | Push In | Camera slowly pushes forward | Building tension, emotional emphasis |
+
+## Shot Type
+
+Each shot must have a shot_type field:
+- "action": Pure visual action, no dialogue spoken
+- "dialogue": Pure character speech
+- "both": Action and dialogue happening simultaneously
 
 ## Output Format
 
 Return ONLY valid JSON in this exact structure (no other text):
 
 {
+  "era_background": "中国古代·仙侠",
   "scenes": [
     {
       "scene_name": "大殿",
@@ -33,22 +79,47 @@ Return ONLY valid JSON in this exact structure (no other text):
       "shots": [
         {
           "shot_num": 1,
-          "duration_sec": 8.0,
+          "shot_type": "action",
+          "duration_sec": 4.0,
+          "characters": [
+            {"name": "张三", "variant": "default"}
+          ],
+          "scene_name": "大殿",
+          "narration": "张三缓步走入大殿，环顾四周，目光落在正前方的宝座上。",
+          "dialogue": "",
+          "camera_movement": "LS"
+        },
+        {
+          "shot_num": 2,
+          "shot_type": "both",
+          "duration_sec": 3.0,
           "characters": [
             {"name": "张三", "variant": "default"},
             {"name": "李四", "variant": "default"}
           ],
           "scene_name": "大殿",
-          "narration": "张三缓步走入大殿，环顾四周。",
+          "narration": "张三走到殿中停下脚步。",
           "dialogue": "张三: 终于到了。",
-          "camera_movement": "slow_push_in"
+          "camera_movement": "MS"
         }
       ]
     }
   ],
   "characters": ["张三", "李四"],
   "scenes_list": ["大殿"]
-}"""
+}
+
+## Field Requirements
+
+- **era_background**: Detect the story's era setting. MUST be one of: "中国古代·仙侠", "中国古代·武侠", "中国古代·宫廷", "中国现代·都市", "中国现代·校园", "民国", "西方奇幻", "科幻未来", "架空世界". Use the most specific match.
+- **shot_num**: Globally sequential across ALL scenes (1, 2, 3, ... N).
+- **shot_type**: One of "action", "dialogue", "both".
+- **characters**: Array of {"name": "...", "variant": "..."} for every character appearing in this shot. Use "default" for standard appearance; create descriptive variant names when clothing/appearance changes (e.g., "夜行衣", "受伤后", "翠绿长裙").
+- **narration**: Visual description of what the viewer sees. Can be empty string if shot is pure dialogue.
+- **dialogue**: Character speech in "Name: 内容" format. Can be empty string if shot is pure action.
+- **camera_movement**: MUST be one of the 10 camera type values listed above.
+- **characters** (top-level): List of ALL unique character names in the entire chapter.
+- **scenes_list**: List of ALL distinct scene/location names in the order they appear."""
 
 
 class ScreenwriterAgent(AgentInterface):
@@ -183,3 +254,21 @@ class ScreenwriterAgent(AgentInterface):
             raise ValueError("Script JSON missing 'characters'")
         if "scenes_list" not in script:
             raise ValueError("Script JSON missing 'scenes_list'")
+        # Validate camera_movement values in shots
+        valid_cameras = {"LS", "MS", "CU", "ECU", "HA", "LA", "OTS", "FT", "Pan", "Push",
+                         "static", "slow_push_in", "slow_pan", "slow_zoom"}
+        valid_shot_types = {"action", "dialogue", "both"}
+        for scene in script.get("scenes", []):
+            for shot in scene.get("shots", []):
+                cam = shot.get("camera_movement", "")
+                if cam not in valid_cameras:
+                    raise ValueError(
+                        f"Invalid camera_movement '{cam}' in shot {shot.get('shot_num', '?')}. "
+                        f"Must be one of: {sorted(valid_cameras)}"
+                    )
+                st = shot.get("shot_type", "")
+                if st not in valid_shot_types:
+                    raise ValueError(
+                        f"Invalid shot_type '{st}' in shot {shot.get('shot_num', '?')}. "
+                        f"Must be one of: {sorted(valid_shot_types)}"
+                    )

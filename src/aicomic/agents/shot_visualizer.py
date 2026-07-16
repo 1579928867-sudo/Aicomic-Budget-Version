@@ -1,0 +1,347 @@
+"""Shot Visualizer Agent — generates per-shot composite image-generation prompts.
+
+Combines character appearance prompts, scene environment prompts, and
+shot-specific action/dialogue/camera into ready-to-use image-gen prompts
+for each storyboard shot.
+"""
+
+import json
+from typing import Any
+
+from ..interface import AgentInterface, AgentResult
+from ..db.repository import Database
+
+SHOT_VISUALIZER_SYSTEM_PROMPT = """You are a professional cinematographer and visual composer for Chinese comic/drama (国漫/漫剧) production. Your task is to generate detailed, image-generation-ready visual prompts for each storyboard shot by combining character reference, scene reference, and shot-specific action.
+
+## Input
+
+You will receive:
+1. **Character references** — each character's visual description (full_prompt for AI image generation)
+2. **Scene references** — each scene's environment description (full_prompt for AI image generation)
+3. **Storyboard shots** — each shot's shot_num, scene_name, narration (what happens), dialogue (who says what), camera_movement (shot type), and which characters appear
+
+## Your Task
+
+For EACH shot, generate a composite image prompt that blends:
+- The scene's environment (where we are)
+- Each character's appearance (BUT only the aspects visible from the camera angle)
+- The specific action/moment happening in this shot
+- The camera composition (framing, angle, movement)
+
+## Critical Rules
+
+1. **Scene as foundation**: Start with the scene's full_prompt as the environmental backdrop.
+2. **Characters in action**: Characters must be described DOING the shot's action, NOT in their "standing pose" reference. Use the character's appearance details (clothing, hair, face) but pose them dynamically according to the narration.
+3. **Camera-aware composition**: Use the camera_movement to determine framing:
+   - LS (远景): Full body ~1/3 frame, environment dominant, wide establishing view
+   - MS (中景): Knees up, balanced character + environment
+   - CU (近景): Chest up, focus on expression and emotion
+   - ECU (特写): Extreme close-up on specific detail (eyes, hands, props)
+   - HA (俯拍): High angle, looking down, compresses space
+   - LA (仰拍): Low angle, looking up, emphasizes height/power
+   - OTS (过肩镜头): Over one character's shoulder to another
+   - FT (跟拍): Camera follows character movement
+   - Pan (摇镜): Horizontal sweeping view
+   - Push (推镜): Camera pushing forward, building tension
+4. **Avoid redundancy**: Don't copy-paste the full character reference. Extract only what's VISIBLE from this camera angle. A CU shot doesn't need shoe details. A back-view shot doesn't need face details.
+5. **Style consistency**: ALL prompts must use "写实电影感风格" (cinematic realistic style). For Chinese ancient settings, prepend "古代仙侠风格". 16:9 horizontal composition (横向16:9).
+6. **Moment-specific**: Describe the EXACT moment — expression, gesture, lighting, atmosphere — not a generic scene. If a character is speaking dialogue, show their mouth/speaking posture. If there's an emotional beat, capture it.
+7. **Chinese prompt**: All image_prompt text must be in Chinese (except technical terms like "16:9", "8K").
+8. **No redundant scene descriptions**: Don't repeat "不能出现其他人，无人纯场景" from scene references — shots WITH characters should have characters. Only pure establishing shots should be character-free.
+
+## Output Format
+
+Return ONLY valid JSON in this exact structure (no other text):
+
+{
+  "shots": [
+    {
+      "shot_num": 1,
+      "image_prompt": "古代仙侠风格，写实电影感风格，横向16:9，8K超高清。中式古典婚房内，红色曼联垂下的大床，晨光透过雕花窗棂洒入。萧澈身穿大红喜衣缓缓睁开眼睛，黑色长发散乱在枕上，表情迷茫，双手撑着床面坐起身。中景，人物居中，暖黄色调，柔和光线，电影级景深。",
+      "composition": "中景（MS），人物居中偏左，床铺占画面下2/3，红色曼联框取画面上部",
+      "mood": "温暖柔和的晨光，喜庆中带着朦胧和迷茫"
+    }
+  ]
+}
+
+## Field Descriptions
+
+- **image_prompt**: Complete Chinese image-generation prompt (~150-300 chars). Must include: style prefix, scene environment, character action/pose/appearance, camera framing, lighting, mood. Ready to paste into an image generator.
+- **composition**: Brief composition note (1-2 sentences) describing framing, character placement, depth of field.
+- **mood**: Brief mood/lighting note (1 sentence) describing the emotional tone and color temperature.
+"""
+
+
+class ShotVisualizerAgent(AgentInterface):
+    """Generates per-shot image prompts by combining char + scene + shot data.
+
+    Input:  {"chapter_id": int, "script_id": int}
+    Output: {"shots_processed": int, "shot_ids": list[int]}
+    """
+
+    agent_name = "shot-visualizer"
+
+    def __init__(self, llm_client: Any):
+        self.llm = llm_client
+
+    def validate_input(self, input_data: dict[str, Any]) -> bool:
+        return (
+            isinstance(input_data.get("chapter_id"), int)
+            and isinstance(input_data.get("script_id"), int)
+        )
+
+    def _build_reference_context(self, db: Database, script_id: int) -> dict:
+        """Load all reference data from DB needed for shot visualization.
+
+        Returns a dict with character refs, scene refs, and shots.
+        """
+        # Load storyboard shots
+        shots = db.get_storyboard_shots(script_id)
+        if not shots:
+            raise ValueError(f"No storyboard shots found for script_id={script_id}")
+
+        # Load the full script JSON for character variant mapping
+        script_rows = db.conn.execute(
+            "SELECT raw_json FROM script WHERE id = ?", (script_id,)
+        ).fetchone()
+        if not script_rows:
+            raise ValueError(f"Script not found for id={script_id}")
+        script_json = json.loads(script_rows["raw_json"])
+
+        # Build character reference: (name, variant) → full_prompt
+        char_refs: dict[str, str] = {}
+        all_char_ids = set()
+        for shot in shots:
+            char_ids = json.loads(shot.get("char_ids", "[]"))
+            all_char_ids.update(char_ids)
+
+        for char_id in all_char_ids:
+            variants = db.get_character_variants(char_id)
+            if not variants:
+                continue
+
+            # Get character name
+            char_rows = db.conn.execute(
+                "SELECT name FROM character_card WHERE id = ?", (char_id,)
+            ).fetchone()
+            if not char_rows:
+                continue
+            char_name = char_rows["name"]
+
+            for v in variants:
+                vd = dict(v)
+                variant_name = vd.get("variant_name", "default")
+                key = f"{char_name}/{variant_name}"
+                appearance = json.loads(vd.get("appearance_json", "{}"))
+                char_refs[key] = appearance.get("full_prompt", "")
+
+        # Build scene reference: scene_name → full_prompt
+        scene_refs: dict[str, str] = {}
+        for shot in shots:
+            scene_id = shot.get("scene_id")
+            if scene_id and scene_id not in scene_refs:
+                scene_rows = db.conn.execute(
+                    "SELECT name, description, lighting, style FROM scene_card WHERE id = ?",
+                    (scene_id,),
+                ).fetchone()
+                if scene_rows:
+                    sr = dict(scene_rows)
+                    # Build a composite scene prompt without "no humans" prefix
+                    # (shots have characters in them)
+                    scene_refs[sr["name"]] = (
+                        f"【{sr.get('style', '')}】{sr.get('description', '')} "
+                        f"光照：{sr.get('lighting', '')}"
+                    )
+
+        # Build shot list with character references
+        # Map char_ids to names for each shot
+        char_id_to_name: dict[int, str] = {}
+        char_id_to_variant: dict[int, str] = {}
+        for scene in script_json.get("scenes", []):
+            for shot_data in scene.get("shots", []):
+                for char in shot_data.get("characters", []):
+                    cname = char.get("name", "")
+                    cvariant = char.get("variant", "default")
+                    # Find char_id from character_card
+                    crow = db.conn.execute(
+                        "SELECT id FROM character_card WHERE name = ?", (cname,)
+                    ).fetchone()
+                    if crow:
+                        cid = crow["id"]
+                        char_id_to_name[cid] = cname
+                        char_id_to_variant[cid] = cvariant
+
+        simplified_shots = []
+        for shot in shots:
+            sd = dict(shot)
+            char_ids = json.loads(sd.get("char_ids", "[]"))
+            char_keys = []
+            for cid in char_ids:
+                cname = char_id_to_name.get(cid, f"char_{cid}")
+                cvariant = char_id_to_variant.get(cid, "default")
+                char_keys.append(f"{cname}/{cvariant}")
+
+            simplified_shots.append({
+                "shot_num": sd["shot_num"],
+                "scene_name": self._find_scene_name(
+                    sd.get("scene_id"), script_json
+                ),
+                "narration": sd.get("narration", ""),
+                "dialogue": sd.get("dialogue", ""),
+                "camera_movement": sd.get("camera_movement", "MS"),
+                "character_keys": char_keys,
+            })
+
+        return {
+            "char_refs": char_refs,
+            "scene_refs": scene_refs,
+            "shots": simplified_shots,
+        }
+
+    @staticmethod
+    def _find_scene_name(scene_id, script_json: dict) -> str:
+        """Find scene name by fuzzy-matching scene_id to script JSON scenes."""
+        if not scene_id:
+            return "未知场景"
+        # Try to match via scene_card lookup in caller is better
+        return ""
+
+    def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
+        chapter_id = input_data["chapter_id"]
+        script_id = input_data["script_id"]
+
+        # ── Idempotency check ──
+        existing_status = db.get_agent_status(self.agent_name, chapter_id)
+        if existing_status == "done":
+            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
+            return AgentResult(success=True, data={"status": "skipped"})
+
+        # ── Mark running ──
+        db.set_agent_status(self.agent_name, chapter_id, "running")
+        db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
+
+        try:
+            # ── Load reference context from DB ──
+            ctx = self._build_reference_context(db, script_id)
+            shots = ctx["shots"]
+            if not shots:
+                raise ValueError("No storyboard shots to process")
+
+            # Build scene name lookup for shot context
+            scene_names_map: dict[int, str] = {}
+            orig_shots = db.get_storyboard_shots(script_id)
+            for osd in orig_shots:
+                sid = osd.get("scene_id")
+                if sid and sid not in scene_names_map:
+                    srow = db.conn.execute(
+                        "SELECT name FROM scene_card WHERE id = ?", (sid,)
+                    ).fetchone()
+                    if srow:
+                        scene_names_map[sid] = srow["name"]
+
+            # Fill in scene names for each shot
+            for s in ctx["shots"]:
+                orig = next(
+                    (o for o in orig_shots if o["shot_num"] == s["shot_num"]), None
+                )
+                if orig and orig.get("scene_id"):
+                    s["scene_name"] = scene_names_map.get(orig["scene_id"], "未知场景")
+
+            # ── Build LLM prompt ──
+            user_prompt = self._build_llm_prompt(ctx)
+
+            # ── Call LLM (single batch call) ──
+            result_json = self.llm.generate_json(
+                system_prompt=SHOT_VISUALIZER_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                max_tokens=8192,
+            )
+
+            # ── Validate ──
+            self._validate_output(result_json, len(shots))
+
+            # ── Save image prompts to DB ──
+            shot_results = result_json.get("shots", [])
+            shot_num_to_db_id = {
+                osd["shot_num"]: osd["id"] for osd in orig_shots
+            }
+            processed = 0
+            for sr in shot_results:
+                shot_num = sr.get("shot_num")
+                image_prompt = sr.get("image_prompt", "")
+                if shot_num and shot_num in shot_num_to_db_id:
+                    db.update_shot_image_prompt(shot_num_to_db_id[shot_num], image_prompt)
+                    processed += 1
+
+            # ── Mark done ──
+            db.set_agent_status(self.agent_name, chapter_id, "done")
+            db.log(
+                self.agent_name, chapter_id, "completed",
+                {"shots_processed": processed, "total_shots": len(shots)},
+            )
+
+            return AgentResult(
+                success=True,
+                data={
+                    "shots_processed": processed,
+                    "total_shots": len(shots),
+                    "shot_ids": [shot_num_to_db_id.get(sr["shot_num"]) for sr in shot_results],
+                },
+            )
+
+        except Exception as e:
+            db.set_agent_status(self.agent_name, chapter_id, "failed")
+            db.log(self.agent_name, chapter_id, "failed", {"error": str(e)}, level="ERROR")
+            return AgentResult(success=False, error=str(e))
+
+    def _build_llm_prompt(self, ctx: dict) -> str:
+        """Build the full user prompt with all reference data."""
+        parts = []
+
+        # Character references
+        parts.append("## 角色定妆参考 (Character Design References)\n")
+        for key, prompt in ctx["char_refs"].items():
+            parts.append(f"### {key}\n{prompt}\n")
+
+        # Scene references
+        parts.append("## 场景环境参考 (Scene Environment References)\n")
+        for key, prompt in ctx["scene_refs"].items():
+            parts.append(f"### {key}\n{prompt}\n")
+
+        # Shot list
+        parts.append("## 分镜镜头列表 (Storyboard Shots)\n")
+        for shot in ctx["shots"]:
+            parts.append(
+                f"--- Shot #{shot['shot_num']} ---\n"
+                f"  场景: {shot.get('scene_name', '?')}\n"
+                f"  运镜: {shot.get('camera_movement', 'MS')}\n"
+                f"  角色: {shot.get('character_keys', [])}\n"
+                f"  画面: {shot.get('narration', '')}\n"
+                f"  对白: {shot.get('dialogue', '')}\n"
+            )
+
+        parts.append(
+            "\n请为以上每个分镜镜头生成 image_prompt（完整中文出图提示词）、"
+            "composition（构图说明）和 mood（氛围色调）。"
+        )
+
+        return "\n".join(parts)
+
+    @staticmethod
+    def _validate_output(result: dict, expected_count: int):
+        """Validate the shot visualizer output structure."""
+        if not isinstance(result, dict):
+            raise ValueError("Shot visualizer JSON must be a dict")
+        if "shots" not in result:
+            raise ValueError("Shot visualizer JSON missing 'shots'")
+        if not isinstance(result["shots"], list):
+            raise ValueError("'shots' must be a list")
+        if len(result["shots"]) == 0:
+            raise ValueError("'shots' list is empty")
+        if len(result["shots"]) != expected_count:
+            raise ValueError(
+                f"Expected {expected_count} shots, got {len(result['shots'])}"
+            )
+        for s in result["shots"]:
+            if not s.get("image_prompt"):
+                raise ValueError(f"Shot {s.get('shot_num', '?')} missing image_prompt")

@@ -36,6 +36,7 @@ def _make_canned_script() -> dict:
                 "shots": [
                     {
                         "shot_num": 1,
+                        "shot_type": "both",
                         "duration_sec": 8.0,
                         "characters": [
                             {"name": "张三", "variant": "default"},
@@ -48,6 +49,7 @@ def _make_canned_script() -> dict:
                     },
                     {
                         "shot_num": 2,
+                        "shot_type": "dialogue",
                         "duration_sec": 6.0,
                         "characters": [{"name": "张三", "variant": "default"}],
                         "scene_name": "大殿",
