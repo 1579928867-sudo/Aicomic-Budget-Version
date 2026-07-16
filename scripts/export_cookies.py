@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export Doubao/即梦 cookies for use with DoubaoVideoGenerator.
+"""Export Doubao cookies for use with DoubaoBrowserClient.
 
 Usage:
     python scripts/export_cookies.py
@@ -22,26 +22,30 @@ def main():
     output_path = Path("data/doubao_cookies.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print("=" * 60)
-    print("  Doubao Cookie Exporter")
-    print("=" * 60)
-    print()
-    print("A browser window will open. Please:")
-    print("  1. Log in to your Doubao/即梦 account")
-    print("  2. Navigate to the video generation page")
-    print("  3. Verify you can see the prompt input box")
-    print("  4. Return here and press Enter")
-    print()
+    print("=" * 60, flush=True)
+    print("  Doubao Cookie Exporter", flush=True)
+    print("=" * 60, flush=True)
+    print(flush=True)
+    print("A browser window will open. Please:", flush=True)
+    print("  1. Log in to your Doubao account", flush=True)
+    print("  2. Verify you can see the main page", flush=True)
+    print("  3. Return here and press Enter", flush=True)
+    print(flush=True)
 
     with sync_playwright() as p:
+        print("Launching browser...", flush=True)
         browser = p.chromium.launch(headless=False)
+        print("Browser launched. Creating context...", flush=True)
         context = browser.new_context()
         page = context.new_page()
 
-        # Navigate to the video gen page
-        page.goto("https://jimeng.jianying.com/ai-tool/video/generate")
+        # Navigate to Doubao main page
+        print("Navigating to https://www.doubao.com/ ...", flush=True)
+        page.goto("https://www.doubao.com/")
+        print("Page loaded. Switch to the browser window to log in.", flush=True)
 
-        input("Press Enter after logging in...")
+        print("Waiting for you to log in...", flush=True)
+        input("\n>>> Press Enter after logging in: ")
 
         # Get all cookies
         cookies = context.cookies()
