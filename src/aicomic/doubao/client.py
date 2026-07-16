@@ -111,6 +111,7 @@ class DoubaoVideoGenerator(VideoGenerator):
         poll_interval_sec: int = 3,
         video_page_url: str = "https://jimeng.jianying.com/ai-tool/video/generate",
         selectors: dict | None = None,
+        browser_client=None,  # v0.6: optional shared browser client
     ):
         self.cookie_file = Path(cookie_file)
         self.headless = headless
@@ -120,9 +121,18 @@ class DoubaoVideoGenerator(VideoGenerator):
         self.video_page_url = video_page_url
         self.selectors = selectors or {}
 
-        # Load cookies from file
+        # v0.6: Use shared browser client if provided, else self-manage
+        if browser_client is not None:
+            self._browser_client = browser_client
+            self._owns_browser = False
+        else:
+            self._browser_client = None
+            self._owns_browser = True
+
+        # Load cookies from file (for backward compat when no shared client)
         self._cookies: list[dict] = []
-        self._load_cookies()
+        if self._owns_browser:
+            self._load_cookies()
 
         # Lazy browser init
         self._playwright = None
@@ -164,7 +174,14 @@ class DoubaoVideoGenerator(VideoGenerator):
             self._context.add_cookies(self._cookies)
 
     def close(self):
-        """Clean up browser and Playwright resources."""
+        """Clean up browser and Playwright resources.
+
+        When using a shared browser_client (v0.6), the caller owns the
+        browser lifecycle, so this is a no-op.
+        """
+        if not self._owns_browser:
+            return  # Don't close shared browser client
+
         if self._context:
             self._context.close()
             self._context = None
@@ -180,6 +197,9 @@ class DoubaoVideoGenerator(VideoGenerator):
     def generate(self, prompt: str, duration_sec: float) -> VideoResult:
         """Generate a video clip via Doubao browser automation.
 
+        When browser_client is shared (v0.6): delegates to browser.generate_video().
+        When self-managed (backward compat): uses own Playwright instance.
+
         Args:
             prompt: Chinese video generation prompt.
             duration_sec: Target duration in seconds.
@@ -187,7 +207,26 @@ class DoubaoVideoGenerator(VideoGenerator):
         Returns:
             VideoResult with success status and output file path.
         """
-        import time
+        if self._browser_client is not None:
+            # v0.6: delegate to shared browser client
+            try:
+                return self._browser_client.generate_video(prompt, duration_sec)
+            except CookieExpiredError as e:
+                return VideoResult(
+                    success=False,
+                    file_path="",
+                    duration_sec=0,
+                    error=f"Cookie expired: {e}",
+                )
+            except Exception as e:
+                return VideoResult(
+                    success=False,
+                    file_path="",
+                    duration_sec=0,
+                    error=f"Doubao generation failed: {e}",
+                )
+
+        # ── Backward compat: self-managed browser ──
         import uuid
 
         self.output_dir.mkdir(parents=True, exist_ok=True)

@@ -67,6 +67,20 @@ def test_generate_returns_failure_without_browser():
     assert result.success is False
 
 
+def test_doubao_video_generator_accepts_browser_client():
+    """Constructor should accept optional browser_client parameter."""
+    from aicomic.doubao.browser import DoubaoBrowserClient
+
+    # This test just verifies the constructor signature accepts browser_client
+    # without actually launching a browser
+    gen = DoubaoVideoGenerator(
+        headless=True,
+        browser_client=None,  # explicitly None means self-managed
+    )
+    assert gen.name == "doubao"
+    assert gen._owns_browser is True
+
+
 @pytest.mark.skip(reason="Requires real Doubao cookies and network access")
 def test_generate_e2e():
     """End-to-end test with real cookies — run manually only."""
