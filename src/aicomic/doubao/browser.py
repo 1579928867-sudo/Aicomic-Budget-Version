@@ -32,16 +32,23 @@ class ImageResult:
 from . import CookieExpiredError
 
 
-# Default selectors — these are placeholders until Task 6 calibration
+# Default selectors — calibrated against real Doubao page (2026-07-16)
 _DEFAULT_SELECTORS = {
     "image": {
-        "prompt_input": "textarea[placeholder*='描述']",
-        "generate_btn": "button:has-text('生成')",
-        "result_img": "img[class*='result']",
-        "loading": "[class*='generating']",
-        "ratio_1_1": "[data-ratio='1:1']",
-        "ratio_16_9": "[data-ratio='16:9']",
-        "ratio_9_16": "[data-ratio='9:16']",
+        # contenteditable div, NOT textarea — press Enter after typing
+        "prompt_input": 'div[contenteditable="true"][role="textbox"]:has(p[data-placeholder="描述你想要的图片"])',
+        "generate_method": "enter",  # Press Enter to start generation
+        # Text-based status container — poll for keywords
+        "status_container": "div.container-enLQFx",
+        "status_done_keywords": ["已生成", "生成成功"],
+        "status_failed_keywords": ["无法生成", "生成失败"],
+        # Download button — triggers browser download of all generated images
+        "download_btn": '#chat-route-main > main > div > div.flex.h-full.w-full.flex-col.items-center > div > div.relative.w-\\[calc\\(100\\%-var\\(--scrollbar-width\\,9px\\)\\)\\].flex-shrink-0.pl-16.pr-7 > div > div > div > div > button',
+        # Aspect ratio selectors (dropdown menu items)
+        "ratio_trigger": 'div[role="button"]:has(svg)',
+        "ratio_1_1": 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio1_1.png"])',
+        "ratio_16_9": 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio16_9.png"])',
+        "ratio_9_16": 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio9_16.png"])',
     },
     "video": {
         "prompt_input": "textarea[placeholder*='描述']",
@@ -193,6 +200,16 @@ class DoubaoBrowserClient:
     ) -> ImageResult:
         """Generate an image via Doubao web UI.
 
+        Flow:
+          1. Navigate to image generation page (logged in via cookies)
+          2. Type prompt into the contenteditable div
+          3. Press Enter to start generation
+          4. Poll status container text for completion / failure
+          5. Click download button, intercept browser download
+
+        The download button saves all 3-4 generated images at once.
+        Playwright's download interception captures the file and saves it.
+
         Args:
             prompt: Chinese image generation prompt.
             aspect_ratio: One of "1:1", "16:9", "9:16".
@@ -200,71 +217,96 @@ class DoubaoBrowserClient:
         Returns:
             ImageResult with success status and local file path.
         """
-        import requests
-
         self._wait_rate_limit()
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        img_dir = self.output_dir / "images"
+        img_dir.mkdir(parents=True, exist_ok=True)
+        img_id = uuid.uuid4().hex[:8]
 
         try:
             self.ensure_browser()
             page = self._context.new_page()
 
             try:
-                # 1. Navigate to image generation page
-                page.goto(self.page_urls["image"], wait_until="domcontentloaded")
+                sel = self.selectors["image"]
 
-                # 2. Check for cookie expiration
+                # ── 1. Navigate to image generation page ──
+                page.goto(self.page_urls["image"], wait_until="domcontentloaded")
+                page.wait_for_load_state("networkidle")
+
+                # ── 2. Check for cookie expiration ──
                 if "login" in page.url.lower() or "passport" in page.url.lower():
                     raise CookieExpiredError(
                         "Doubao cookies expired. Please re-export cookies from "
                         "a logged-in browser session to data/doubao_cookies.json"
                     )
 
-                # 3. Wait for and fill the prompt input
-                sel = self.selectors["image"]
-                prompt_selector = sel.get("prompt_input", "textarea")
+                # ── 3. Optionally select aspect ratio ──
+                if aspect_ratio and aspect_ratio != "16:9":
+                    self._select_aspect_ratio(page, sel, aspect_ratio)
+
+                # ── 4. Type prompt into contenteditable div ──
+                prompt_selector = sel.get("prompt_input", 'div[contenteditable="true"]')
                 page.wait_for_selector(prompt_selector, timeout=15000)
-                page.fill(prompt_selector, prompt)
+                page.click(prompt_selector)  # focus the editor
+                time.sleep(0.3)
+                page.keyboard.insert_text(prompt)
+                time.sleep(0.3)
 
-                # 4. Select aspect ratio if not default
-                ratio_key = f"ratio_{aspect_ratio.replace(':', '_')}"
-                ratio_selector = sel.get(ratio_key)
-                if ratio_selector:
-                    try:
-                        page.click(ratio_selector, timeout=3000)
-                    except Exception:
-                        pass  # Ratio selector not found, use default
+                # ── 5. Press Enter to start generation ──
+                page.keyboard.press("Enter")
 
-                # 5. Click generate button
-                btn_selector = sel.get("generate_btn", "button:has-text('生成')")
-                page.wait_for_selector(btn_selector, timeout=5000)
-                page.click(btn_selector)
-
-                # 6. Wait for generation to complete
-                image_url = self._poll_for_image_result(page, sel)
-
-                if image_url is None:
+                # ── 6. Poll status text for completion ──
+                status = self._poll_for_image_result(page, sel)
+                if not status:
                     return ImageResult(
                         success=False,
                         file_path="",
-                        error="Image generation timed out or failed",
+                        error="Image generation timed out or failed — no completion status detected",
                     )
 
-                # 7. Download image
-                img_id = uuid.uuid4().hex[:8]
-                output_path = str(self.output_dir / "images" / f"doubao_{img_id}.png")
-                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                # ── 7. Click download button, intercept browser download ──
+                download_selector = sel.get("download_btn")
+                if not download_selector:
+                    return ImageResult(
+                        success=False,
+                        file_path="",
+                        error="Download button selector not configured",
+                    )
 
-                self._download_file(image_url, output_path)
+                try:
+                    page.wait_for_selector(download_selector, timeout=15000)
+                except Exception:
+                    return ImageResult(
+                        success=False,
+                        file_path="",
+                        error="Download button did not appear — generation may have failed",
+                    )
+
+                # Determine file extension from download
+                output_path = str(img_dir / f"doubao_{img_id}")
+                try:
+                    with page.expect_download(timeout=60000) as download_info:
+                        page.click(download_selector)
+                    download = download_info.value
+                    # Preserve original extension
+                    suggested = Path(download.suggested_filename)
+                    output_path = str(img_dir / f"doubao_{img_id}{suggested.suffix}")
+                    download.save_as(output_path)
+                except Exception as e:
+                    return ImageResult(
+                        success=False,
+                        file_path="",
+                        error=f"Download failed: {e}",
+                    )
 
                 return ImageResult(
                     success=True,
                     file_path=output_path,
-                    url=image_url,
                     metadata={
                         "generator": "doubao",
                         "image_id": img_id,
                         "aspect_ratio": aspect_ratio,
+                        "prompt": prompt,
                     },
                 )
 
@@ -279,6 +321,29 @@ class DoubaoBrowserClient:
                 file_path="",
                 error=f"Doubao image generation failed: {e}",
             )
+
+    def _select_aspect_ratio(self, page, sel: dict, aspect_ratio: str):
+        """Click ratio trigger button, then select the target ratio menu item."""
+        ratio_key = f"ratio_{aspect_ratio.replace(':', '_')}"
+        ratio_selector = sel.get(ratio_key)
+        if not ratio_selector:
+            return  # Unknown ratio, skip
+
+        trigger_selector = sel.get("ratio_trigger")
+        if trigger_selector:
+            try:
+                page.wait_for_selector(trigger_selector, timeout=5000)
+                page.click(trigger_selector)
+                time.sleep(0.5)
+            except Exception:
+                return
+
+        try:
+            page.wait_for_selector(ratio_selector, timeout=5000)
+            page.click(ratio_selector)
+            time.sleep(0.3)
+        except Exception:
+            pass  # Ratio selector not found, use default
 
     # ── Core: Video generation ──
 
@@ -365,28 +430,49 @@ class DoubaoBrowserClient:
 
     # ── Private: polling helpers ──
 
-    def _poll_for_image_result(self, page, sel: dict) -> str | None:
-        """Poll DOM for image generation completion. Returns image URL or None."""
-        loading_selector = sel.get("loading", "[class*='generating']")
-        result_selector = sel.get("result_img", "img[class*='result']")
+    def _poll_for_image_result(self, page, sel: dict) -> bool:
+        """Poll the status container's text for completion / failure keywords.
+
+        Returns True if generation completed successfully, False if failed,
+        loops until timeout then returns False.
+        """
+        container_selector = sel.get("status_container", "div.container-enLQFx")
+        done_keywords = sel.get("status_done_keywords", ["已生成", "生成成功"])
+        failed_keywords = sel.get("status_failed_keywords", ["无法生成", "生成失败"])
 
         start = time.time()
         while time.time() - start < self.timeout_sec:
-            # Still loading — wait
-            if page.query_selector(loading_selector):
-                time.sleep(self.poll_interval_sec)
-                continue
+            try:
+                container = page.query_selector(container_selector)
+                if container:
+                    text = container.inner_text().strip()
+                    if text:
+                        # Check for failure first
+                        for kw in failed_keywords:
+                            if kw in text:
+                                return False
+                        # Check for completion
+                        for kw in done_keywords:
+                            if kw in text:
+                                return True
+            except Exception:
+                pass
 
-            # Try to find result image
-            img_el = page.query_selector(result_selector)
-            if img_el:
-                src = img_el.get_attribute("src")
-                if src and not src.startswith("data:"):
-                    return src
+            # Fallback: check entire page body for status keywords
+            try:
+                body_text = page.inner_text("body")
+                for kw in failed_keywords:
+                    if kw in body_text:
+                        return False
+                for kw in done_keywords:
+                    if kw in body_text:
+                        return True
+            except Exception:
+                pass
 
             time.sleep(self.poll_interval_sec)
 
-        return None
+        return False
 
     def _poll_for_video_result(self, page, sel: dict) -> str | None:
         """Poll DOM for video generation completion. Returns video URL or None."""

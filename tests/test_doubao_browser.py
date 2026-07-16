@@ -91,7 +91,7 @@ def test_custom_selectors_merge():
     # Custom value should be used
     assert client.selectors["image"]["prompt_input"] == "textarea#my-input"
     # Non-overridden selector should still have default
-    assert "generate_btn" in client.selectors["image"]
+    assert "download_btn" in client.selectors["image"]
 
 
 def test_rate_limit_tracking():

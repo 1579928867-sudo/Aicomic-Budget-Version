@@ -31,13 +31,20 @@ doubao:
     video: "https://www.doubao.com/chat/create-video"
   selectors:
     image:
-      prompt_input: "textarea[placeholder*='描述']"
-      generate_btn: "button:has-text('生成')"
-      result_img: "img[class*='result']"
-      loading: "[class*='generating']"
-      ratio_1_1: "[data-ratio='1:1']"
-      ratio_16_9: "[data-ratio='16:9']"
-      ratio_9_16: "[data-ratio='9:16']"
+      # Prompt input is a contenteditable div, NOT a textarea — use keyboard.type + Enter
+      prompt_input: 'div[contenteditable="true"][role="textbox"]:has(p[data-placeholder="描述你想要的图片"])'
+      generate_method: "enter"   # Press Enter to start generation (no button exists)
+      # Status container — poll its text content for completion keywords
+      status_container: "div.container-enLQFx"
+      status_done_keywords: ["已生成", "生成成功"]
+      status_failed_keywords: ["无法生成", "生成失败"]
+      # Download button — downloads all 3-4 generated images at once
+      download_btn: '#chat-route-main > main > div > div.flex.h-full.w-full.flex-col.items-center > div > div.relative.w-\[calc\(100\%-var\(--scrollbar-width\,9px\)\)\].flex-shrink-0.pl-16.pr-7 > div > div > div > div > button'
+      # Aspect ratio: click ratio trigger button, then click menu item
+      ratio_trigger: 'div[role="button"]:has(svg)'
+      ratio_1_1: 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio1_1.png"])'
+      ratio_16_9: 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio16_9.png"])'
+      ratio_9_16: 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio9_16.png"])'
     video:
       prompt_input: "textarea[placeholder*='描述']"
       generate_btn: "button:has-text('生成')"
