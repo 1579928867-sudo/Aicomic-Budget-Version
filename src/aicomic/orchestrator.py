@@ -55,13 +55,18 @@ class Orchestrator:
 
         return {name: sorted(vs) for name, vs in variants.items()}
 
-    def run_chapter(self, chapter_id: int, raw_text: str, with_video: bool = False) -> AgentResult:
+    def run_chapter(
+        self, chapter_id: int, raw_text: str,
+        with_video: bool = False,
+        with_images: bool = False,  # v0.6
+    ) -> AgentResult:
         """Run the full pipeline for a single chapter.
 
         Pipeline steps (v0.5):
             1. Screenwriter — generate script from raw text
             2. Character Designer — generate appearance descriptions
             3. Scene Designer — generate scene environment descriptions
+            3.5. Image Generator — generate real images from view prompts (optional)
             4. Shot Visualizer — generate per-shot composite image prompts
             5. Video Generator — generate video clips (optional, only if with_video=True)
             6. Video Composer — stitch clips into final video with subtitles (optional)
@@ -70,6 +75,7 @@ class Orchestrator:
             chapter_id: ID of the chapter to process.
             raw_text: The raw chapter text.
             with_video: If True, also run video generation (Steps 5-6).
+            with_images: If True, also run image generation (Step 3.5).
 
         Returns:
             AgentResult with the final status.
@@ -140,6 +146,21 @@ class Orchestrator:
                 level="ERROR",
             )
 
+        # ── Step 3.5: Image Generator (optional) ──
+        img_result = None
+        if with_images and script_id:
+            img_result = self.bus.run(
+                "image-generator",
+                {"chapter_id": chapter_id, "script_id": script_id},
+                self.db,
+            )
+            if not img_result.success:
+                self.db.log(
+                    "orchestrator", chapter_id, "pipeline_failed",
+                    {"failed_at": "image-generator", "error": img_result.error},
+                    level="ERROR",
+                )
+
         # ── Step 4: Shot Visualizer ──
         shot_vis_result = self.bus.run(
             "shot-visualizer",
@@ -193,6 +214,7 @@ class Orchestrator:
                 "script_id": script_id,
                 "char_designer": "ok" if char_result.success else "failed",
                 "scene_designer": "ok" if scene_result.success else "failed",
+                "image_generator": "ok" if (img_result and img_result.success) else ("skipped" if not with_images else "failed"),
                 "shot_visualizer": "ok" if shot_vis_result.success else "failed",
                 "video_generator": "ok" if (video_result and video_result.success) else ("skipped" if not with_video else "failed"),
                 "video_composer": "ok" if (composer_result and composer_result.success) else ("skipped" if not with_video else "failed"),
@@ -208,6 +230,9 @@ class Orchestrator:
                 "scenes_list": scenes_list,
                 "char_variants_created": char_result.data.get("variants_created", 0) if char_result.data else 0,
                 "scenes_updated": scene_result.data.get("scenes_updated", 0) if scene_result.data else 0,
+                "images_generated": img_result.data.get("images_generated", 0) if (img_result and img_result.data) else 0,
+                "variants_processed": img_result.data.get("variants_processed", 0) if (img_result and img_result.data) else 0,
+                "scenes_processed": img_result.data.get("scenes_processed", 0) if (img_result and img_result.data) else 0,
                 "shots_visualized": shot_vis_result.data.get("shots_processed", 0) if shot_vis_result.data else 0,
                 "clips_created": video_result.data.get("clips_created", 0) if (video_result and video_result.data) else 0,
                 "final_video_path": composer_result.data.get("final_video_path") if (composer_result and composer_result.data) else None,

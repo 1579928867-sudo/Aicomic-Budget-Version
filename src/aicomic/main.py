@@ -100,6 +100,8 @@ def cmd_run(args: argparse.Namespace, config: dict):
     from .agents.video_generator import VideoGeneratorAgent
     from .agents.video_composer import VideoComposerAgent
     from .doubao.client import MockVideoGenerator, DoubaoVideoGenerator
+    from .agents.image_generator import ImageGeneratorAgent
+    from .doubao.browser import DoubaoBrowserClient
     from .orchestrator import Orchestrator
 
     chapter_file: Path = args.file
@@ -145,14 +147,39 @@ def cmd_run(args: argparse.Namespace, config: dict):
         bus.register(scene_designer)
         bus.register(shot_visualizer)
 
+        with_images = getattr(args, "with_images", False)
         with_video = getattr(args, "with_video", False)
+
+        # Resolve video_backend early for shared browser_client decision
+        video_cfg = config.get("video", {})
+        video_output_dir = Path(video_cfg.get("output_dir", "data/videos"))
+        video_backend = None
         if with_video:
-            video_cfg = config.get("video", {})
-            video_output_dir = Path(
-                video_cfg.get("output_dir", "data/videos")
-            )
             video_backend = getattr(args, "video_backend", None) or video_cfg.get("generator", "mock")
 
+        # v0.6: Shared browser client (created once, shared across agents)
+        browser_client = None
+        if with_images or (with_video and video_backend == "doubao"):
+            doubao_cfg = config.get("doubao", {})
+            browser_client = DoubaoBrowserClient(
+                cookie_file=Path(doubao_cfg.get("cookie_file", "data/doubao_cookies.json")),
+                headless=doubao_cfg.get("headless", True),
+                output_dir=doubao_cfg.get("output_dir", "data/"),
+                timeout_sec=doubao_cfg.get("timeout_sec", 300),
+                poll_interval_sec=doubao_cfg.get("poll_interval_sec", 3),
+                rate_limit_sec=doubao_cfg.get("rate_limit_sec", 10),
+                selectors=doubao_cfg.get("selectors", {}),
+            )
+            # Inject page URLs from config if present
+            pages_cfg = doubao_cfg.get("pages", {})
+            if pages_cfg:
+                browser_client.page_urls.update(pages_cfg)
+
+        if with_images:
+            image_generator = ImageGeneratorAgent(browser_client=browser_client)
+            bus.register(image_generator)
+
+        if with_video:
             if video_backend == "doubao":
                 doubao_cfg = config.get("doubao", {})
                 video_gen = DoubaoVideoGenerator(
@@ -162,7 +189,8 @@ def cmd_run(args: argparse.Namespace, config: dict):
                     timeout_sec=doubao_cfg.get("timeout_sec", 300),
                     poll_interval_sec=doubao_cfg.get("poll_interval_sec", 3),
                     video_page_url=doubao_cfg.get("video_page_url", "https://jimeng.jianying.com/ai-tool/video/generate"),
-                    selectors=doubao_cfg.get("selectors", {}),
+                    selectors=doubao_cfg.get("selectors", {}).get("video", {}),
+                    browser_client=browser_client,  # v0.6: shared
                 )
             else:
                 video_gen = MockVideoGenerator(output_dir=video_output_dir)
@@ -178,10 +206,15 @@ def cmd_run(args: argparse.Namespace, config: dict):
         orchestrator = Orchestrator(bus, db)
 
         # ── Run ──
-        pipeline_label = "v0.5" if with_video else "v0.5"
-        print(f"Running pipeline ({pipeline_label}: Screenwriter → CharDesigner → SceneDesigner → ShotVisualizer"
-              + (" → VideoGenerator → VideoComposer)..." if with_video else ")..."))
-        result = orchestrator.run_chapter(chapter_id, raw_text, with_video=with_video)
+        pipeline_label = "v0.6"
+        steps = "Screenwriter → CharDesigner → SceneDesigner"
+        steps += " → ImageGenerator" if with_images else ""
+        steps += " → ShotVisualizer"
+        steps += " → VideoGenerator → VideoComposer" if with_video else ""
+        print(f"Running pipeline ({pipeline_label}: {steps})...")
+        result = orchestrator.run_chapter(
+            chapter_id, raw_text, with_video=with_video, with_images=with_images,
+        )
 
         if result.success:
             print("Pipeline completed successfully!")
@@ -191,6 +224,8 @@ def cmd_run(args: argparse.Namespace, config: dict):
                 print(f"  Scenes: {result.data.get('scenes_list')}")
                 print(f"  Char variants created: {result.data.get('char_variants_created', 0)}")
                 print(f"  Scenes updated: {result.data.get('scenes_updated', 0)}")
+                if with_images:
+                    print(f"  Images generated: {result.data.get('images_generated', 0)}")
                 print(f"  Shots visualized: {result.data.get('shots_visualized', 0)}")
                 if with_video:
                     print(f"  Video clips created: {result.data.get('clips_created', 0)}")
@@ -202,6 +237,8 @@ def cmd_run(args: argparse.Namespace, config: dict):
             sys.exit(1)
 
     finally:
+        if browser_client:
+            browser_client.close()
         db.close()
 
 
@@ -237,6 +274,12 @@ def main():
         type=Path,
         default=Path("config/settings.yaml"),
         help="Path to config file (default: config/settings.yaml)",
+    )
+    run_parser.add_argument(
+        "--with-images",
+        action="store_true",
+        default=False,
+        help="Also generate real images for characters and scenes via Doubao (default: off)",
     )
     run_parser.add_argument(
         "--with-video",
