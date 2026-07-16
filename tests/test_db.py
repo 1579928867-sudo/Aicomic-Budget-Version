@@ -255,3 +255,67 @@ def test_create_final_video(db):
     assert row is not None
     assert row["chapter_id"] == chapter_id
     assert row["file_path"] == "data/videos/final_1.mp4"
+
+
+def test_migrate_schema_adds_image_columns(db):
+    """v0.6 migration: add front/side/back_image to appearance_variant; wide/mid/close_image to scene_card."""
+    db.migrate_schema()
+
+    # Verify appearance_variant columns
+    av_cols = db.conn.execute("PRAGMA table_info(appearance_variant)").fetchall()
+    av_names = [c["name"] for c in av_cols]
+    for col in ["front_image", "side_image", "back_image"]:
+        assert col in av_names, f"{col} missing from appearance_variant"
+
+    # Verify scene_card columns
+    sc_cols = db.conn.execute("PRAGMA table_info(scene_card)").fetchall()
+    sc_names = [c["name"] for c in sc_cols]
+    for col in ["wide_image", "mid_image", "close_image"]:
+        assert col in sc_names, f"{col} missing from scene_card"
+
+    # Verify idempotent
+    db.migrate_schema()
+
+
+def test_update_appearance_variant_image(db):
+    """回填 appearance_variant 的 {view}_image 列."""
+    novel_id = db.create_novel("测试", "")
+    chapter_id = db.create_chapter(novel_id, 1, "内容")
+    char_id, _ = db.get_or_create_character("叶凡")
+    variant_id = db.create_appearance_variant(
+        character_id=char_id,
+        variant_name="default",
+        variant_type="default",
+        appearance_json='{"full_prompt": "test"}',
+    )
+    db.migrate_schema()
+
+    db.update_appearance_variant_image(variant_id, "front", "data/images/front_1.png")
+    db.update_appearance_variant_image(variant_id, "side", "data/images/side_1.png")
+    db.update_appearance_variant_image(variant_id, "back", "data/images/back_1.png")
+
+    row = db.conn.execute(
+        "SELECT front_image, side_image, back_image FROM appearance_variant WHERE id = ?",
+        (variant_id,),
+    ).fetchone()
+    assert row["front_image"] == "data/images/front_1.png"
+    assert row["side_image"] == "data/images/side_1.png"
+    assert row["back_image"] == "data/images/back_1.png"
+
+
+def test_update_scene_card_image(db):
+    """回填 scene_card 的 {view}_image 列."""
+    scene_id = db.get_or_create_scene("山门")
+    db.migrate_schema()
+
+    db.update_scene_card_image(scene_id, "wide", "data/images/wide_1.png")
+    db.update_scene_card_image(scene_id, "mid", "data/images/mid_1.png")
+    db.update_scene_card_image(scene_id, "close", "data/images/close_1.png")
+
+    row = db.conn.execute(
+        "SELECT wide_image, mid_image, close_image FROM scene_card WHERE id = ?",
+        (scene_id,),
+    ).fetchone()
+    assert row["wide_image"] == "data/images/wide_1.png"
+    assert row["mid_image"] == "data/images/mid_1.png"
+    assert row["close_image"] == "data/images/close_1.png"

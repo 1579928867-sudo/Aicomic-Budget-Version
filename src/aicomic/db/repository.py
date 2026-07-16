@@ -146,6 +146,14 @@ class Database:
             "ALTER TABLE storyboard_shot ADD COLUMN image_prompt TEXT DEFAULT ''",
             # v0.4: add duration_sec column to video_clip
             "ALTER TABLE video_clip ADD COLUMN duration_sec REAL NOT NULL DEFAULT 0.0",
+            # v0.6: add image path columns to appearance_variant
+            "ALTER TABLE appearance_variant ADD COLUMN front_image TEXT DEFAULT ''",
+            "ALTER TABLE appearance_variant ADD COLUMN side_image TEXT DEFAULT ''",
+            "ALTER TABLE appearance_variant ADD COLUMN back_image TEXT DEFAULT ''",
+            # v0.6: add image path columns to scene_card
+            "ALTER TABLE scene_card ADD COLUMN wide_image TEXT DEFAULT ''",
+            "ALTER TABLE scene_card ADD COLUMN mid_image TEXT DEFAULT ''",
+            "ALTER TABLE scene_card ADD COLUMN close_image TEXT DEFAULT ''",
         ]
         for sql in migrations:
             try:
@@ -373,6 +381,28 @@ class Database:
                SET front_view = ?, side_view = ?, back_view = ?
                WHERE id = ?""",
             (front, side, back, variant_id),
+        )
+        self.conn.commit()
+
+    def update_appearance_variant_image(
+        self, variant_id: int, view: str, file_path: str
+    ):
+        """Update {view}_image column on an appearance_variant (front/side/back)."""
+        column = f"{view}_image"
+        self.conn.execute(
+            f"UPDATE appearance_variant SET {column} = ? WHERE id = ?",
+            (file_path, variant_id),
+        )
+        self.conn.commit()
+
+    def update_scene_card_image(
+        self, scene_id: int, view: str, file_path: str
+    ):
+        """Update {view}_image column on a scene_card (wide/mid/close)."""
+        column = f"{view}_image"
+        self.conn.execute(
+            f"UPDATE scene_card SET {column} = ? WHERE id = ?",
+            (file_path, scene_id),
         )
         self.conn.commit()
 
