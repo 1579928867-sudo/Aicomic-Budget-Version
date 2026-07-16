@@ -161,7 +161,12 @@ class DoubaoBrowserClient:
                 "--disable-blink-features=AutomationControlled",
             ],
         )
-        self._context = self._browser.new_context()
+        # Configure downloads to a temp dir so we can monitor the filesystem
+        self._download_dir = Path(self.output_dir) / ".downloads"
+        self._download_dir.mkdir(parents=True, exist_ok=True)
+        self._context = self._browser.new_context(
+            accept_downloads=True,
+        )
 
         if self._cookies:
             self._context.add_cookies(self._cookies)
@@ -267,41 +272,19 @@ class DoubaoBrowserClient:
                         error="Image generation timed out or failed — no completion status detected",
                     )
 
-                # ── 7. Click download button, intercept browser download ──
+                # ── 7. Click download button, monitor filesystem for file ──
                 download_btn = self._find_download_button(page, sel)
                 if not download_btn:
                     return ImageResult(
                         success=False,
                         file_path="",
-                        error="Download button not found — try manual download from browser",
+                        error="Download button not found",
                     )
 
-                # Determine file extension from download
-                output_path = str(img_dir / f"doubao_{img_id}")
-                try:
-                    with page.expect_download(timeout=120000) as download_info:
-                        download_btn.click()
-                    download = download_info.value
-                    suggested = Path(download.suggested_filename)
-                    output_path = str(img_dir / f"doubao_{img_id}{suggested.suffix}")
-                    download.save_as(output_path)
-                except Exception as e:
-                    return ImageResult(
-                        success=False,
-                        file_path="",
-                        error=f"Download failed: {e}",
-                    )
-
-                return ImageResult(
-                    success=True,
-                    file_path=output_path,
-                    metadata={
-                        "generator": "doubao",
-                        "image_id": img_id,
-                        "aspect_ratio": aspect_ratio,
-                        "prompt": prompt,
-                    },
+                result = self._click_and_capture_download(
+                    page, download_btn, img_id, img_dir
                 )
+                return result
 
             finally:
                 page.close()
@@ -420,6 +403,100 @@ class DoubaoBrowserClient:
                 duration_sec=0,
                 error=f"Doubao video generation failed: {e}",
             )
+
+    # ── Private: download handling ──
+
+    def _click_and_capture_download(self, page, download_btn, img_id: str, target_dir: Path) -> ImageResult:
+        """Click download button and capture the file via filesystem polling.
+
+        Playwright's expect_download often fails on SPAs that trigger downloads
+        via JS blobs. Instead, we:
+          1. Use CDP to set a known download directory for this page
+          2. Click the button
+          3. Poll that directory for new files
+        """
+        import os
+
+        dl_dir = self._download_dir
+        # Clean any stale files from previous runs
+        for old in dl_dir.iterdir():
+            try:
+                old.unlink()
+            except Exception:
+                pass
+
+        # Record existing files before click
+        before = set(f.name for f in dl_dir.iterdir())
+
+        # Set download path via CDP for this page
+        try:
+            cdp = self._context.new_cdp_session(page)
+            cdp.send("Browser.setDownloadBehavior", {
+                "behavior": "allow",
+                "downloadPath": str(dl_dir.resolve()),
+            })
+        except Exception:
+            pass  # CDP might not be available
+
+        # Click the download button
+        download_btn.click()
+
+        # Poll filesystem for new file (max 60 seconds)
+        start = time.time()
+        output_path = ""
+        while time.time() - start < 60:
+            time.sleep(1)
+            try:
+                current = set(f.name for f in dl_dir.iterdir() if f.is_file())
+                new_files = current - before
+                # Filter out .crdownload (Chrome temp files)
+                real_files = [f for f in new_files if not f.endswith(".crdownload")]
+                if real_files:
+                    newest = max(real_files, key=lambda n: (dl_dir / n).stat().st_mtime)
+                    src = dl_dir / newest
+                    # Wait for file to finish writing (size stable for 1s)
+                    if src.stat().st_size > 0:
+                        size1 = src.stat().st_size
+                        time.sleep(1)
+                        if src.exists() and src.stat().st_size == size1:
+                            suffix = src.suffix or ".zip"
+                            output_path = str(target_dir / f"doubao_{img_id}{suffix}")
+                            src.rename(output_path)
+                            break
+            except Exception:
+                pass
+
+        if output_path:
+            return ImageResult(
+                success=True,
+                file_path=output_path,
+                metadata={
+                    "generator": "doubao",
+                    "image_id": img_id,
+                },
+            )
+
+        # Fallback: try Playwright's download event
+        try:
+            with page.expect_download(timeout=30000) as dl_info:
+                download_btn.click()
+            download = dl_info.value
+            suggested = Path(download.suggested_filename)
+            output_path = str(target_dir / f"doubao_{img_id}{suggested.suffix}")
+            download.save_as(output_path)
+            return ImageResult(
+                success=True,
+                file_path=output_path,
+                metadata={"generator": "doubao", "image_id": img_id},
+            )
+        except Exception:
+            pass
+
+        return ImageResult(
+            success=False,
+            file_path="",
+            error="Download capture failed: no file appeared in download directory",
+        )
 
     # ── Private: download button discovery ──
 
