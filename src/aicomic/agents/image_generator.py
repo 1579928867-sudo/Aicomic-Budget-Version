@@ -145,9 +145,9 @@ class ImageGeneratorAgent(AgentInterface):
                     )
                     return chosen
                 print(f"  ⚠ 请输入 1-{len(paths)}")
-            except (ValueError, KeyboardInterrupt):
-                print("\n  ✗ 已取消")
-                return None
+            except (ValueError, KeyboardInterrupt, EOFError):
+                print("\n  ℹ 非交互模式，自动选择第1张")
+                return paths[0]
 
     def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
         chapter_id = input_data["chapter_id"]
@@ -185,7 +185,7 @@ class ImageGeneratorAgent(AgentInterface):
             total_entities = len(variants) + len(scenes)
             print(
                 f"  Image Generator: 开始生成图片 "
-                f"({len(variants)} 角色三视图, {len(scenes)} 场景多景别)..."
+                f"({total_entities} 实体: {len(variants)} 角色三视图, {len(scenes)} 场景多景别)..."
             )
 
             # ── Generate character three-view images ──

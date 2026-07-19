@@ -231,10 +231,6 @@ class DoubaoBrowserClient:
             return items.length;
         }""")
 
-    def _count_grid_items(self, page) -> int:
-        """Count image-box-grid-item elements (same as _count_result_images, explicit name)."""
-        return self._count_result_images(page)
-
     def _has_finished_grid(self, page) -> bool:
         """Check if a finished image grid exists in the page."""
         return page.evaluate("""() => {
@@ -249,14 +245,12 @@ class DoubaoBrowserClient:
 
         Calibrated flow (2026-07-19):
           1. Navigate to create-image page
-          2. Capture baseline image count (to ignore sidebar history)
-          3. Type prompt + Enter to submit
-          4. Poll for NEW image thumbnails appearing in DOM
-          5. Click each → detail view → save button → filesystem poll
-          6. Return first downloaded image path
-
-        Uses baseline comparison to distinguish newly-generated images
-        from chat history thumbnails.
+          2. Check for login redirect
+          3. Optionally select aspect ratio
+          4. Type prompt into contenteditable, click send button
+          5. Poll for finished image grid (data-finished="true")
+          6. Extract grid image URLs, download via HTTP (requests)
+          7. Return all downloaded paths as ImageResult (file_path + file_paths)
         """
         self._wait_rate_limit()
         img_dir = self.output_dir / "images"

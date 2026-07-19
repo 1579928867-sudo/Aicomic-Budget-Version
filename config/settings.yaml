@@ -17,7 +17,8 @@ database:
   path: "data/aicomic.db"
 
 doubao:
-  cookie_file: "data/doubao_cookies.json"
+  state_file: "data/doubao_state.json"
+  cookie_file: "data/doubao_cookies.json"  # legacy fallback
   headless: true
   timeout_sec: 300
   poll_interval_sec: 3
@@ -31,16 +32,26 @@ doubao:
     video: "https://www.doubao.com/chat/create-video"
   selectors:
     image:
-      # Prompt input is a contenteditable div, NOT a textarea — use keyboard.type + Enter
-      prompt_input: 'div[contenteditable="true"][role="textbox"]:has(p[data-placeholder="描述你想要的图片"])'
-      generate_method: "enter"   # Press Enter to start generation (no button exists)
-      # Status container — poll its text content for completion keywords
-      status_container: "div.container-enLQFx"
+      # Prompt input: contenteditable div, type text + press Enter
+      prompt_input: 'div[contenteditable="true"][role="textbox"]'
+      generate_method: "enter"
+      # Completion detection: scan page body for these keywords
       status_done_keywords: ["已生成", "生成成功"]
-      status_failed_keywords: ["无法生成", "生成失败"]
-      # Download button — downloads all 3-4 generated images at once
-      download_btn: '#chat-route-main > main > div > div.flex.h-full.w-full.flex-col.items-center > div > div.relative.w-\[calc\(100\%-var\(--scrollbar-width\,9px\)\)\].flex-shrink-0.pl-16.pr-7 > div > div > div > div > button'
-      # Aspect ratio: click ratio trigger button, then click menu item
+      status_failed_keywords: ["无法生成", "生成失败", "违规"]
+      # Download: click grid image → detail view → blue save button
+      save_button_strategy: "dbx-highlight"  # data-dbx-name=button + bg-dbx-text-highlight
+      save_button_js: |
+        (() => {
+          const btns = document.querySelectorAll('[data-dbx-name="button"], button');
+          for (const el of btns) {
+            const r = el.getBoundingClientRect();
+            if (r.y > 200 || r.y < 20) continue;
+            if ((el.className || '').includes('bg-dbx-text-highlight'))
+              return {x: r.x + r.width/2, y: r.y + r.height/2};
+          }
+          return null;
+        })()
+      # Aspect ratio dropdown
       ratio_trigger: 'div[role="button"]:has(svg)'
       ratio_1_1: 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio1_1.png"])'
       ratio_16_9: 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio16_9.png"])'

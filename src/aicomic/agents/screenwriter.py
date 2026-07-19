@@ -16,11 +16,18 @@ Your task: Convert the given novel chapter into a structured JSON script with st
 3. **Psychological descriptions → actions**: "He was furious" → action like "攥紧拳头，指节发白". "She realized..." → expression change like "眼神一凝，若有所悟".
 4. **Worldbuilding → visual/dialogue**: Exposition like "他是无命人" must become dialogue from another character or a visual detail, never a narration text dump.
 
+## Shot Count & Density Rules
+
+5. **Total shot count**: A typical novel chapter (~3000-5000 characters) should produce **8-15 shots maximum**. Do NOT create a shot for every single gesture or line of dialogue. Each shot should cover a meaningful narrative "beat" — a complete micro-action or a short dialogue exchange. Combine adjacent actions into one shot when they happen in the same location with the same characters.
+6. **Merge rule**: Adjacent actions by the same character in the same scene should be ONE shot unless a camera change is essential for dramatic effect. "He walked in, looked around, and sat down" = ONE shot, not three.
+7. **Dialogue batching**: 2-4 lines of back-and-forth dialogue in the same scene can be a SINGLE shot ("both" type) rather than separate shots, as long as total duration ≤10s.
+8. **Skip trivial actions**: Minor gestures (blink, slight nod, finger tap) do not need dedicated shots — fold them into the narration of the next meaningful action shot.
+9. Each shot duration MUST be ≤10 seconds and ≥1 second.
+
 ## Shot Rhythm Rules
 
-5. **Action/Dialogue alternation**: NEVER have 5+ consecutive seconds of pure dialogue without an action shot between them. NEVER have 10+ consecutive seconds of pure action without dialogue.
-6. **Camera change every 3-5 seconds**: Vertical short-drama demands fast visual pacing. Same camera type must not repeat more than twice in a row.
-7. Each shot duration MUST be ≤10 seconds.
+10. **Action/Dialogue alternation**: NEVER have 5+ consecutive seconds of pure dialogue without an action shot between them. NEVER have 10+ consecutive seconds of pure action without dialogue.
+11. **Camera change every 3-5 seconds**: Vertical short-drama demands fast visual pacing. Same camera type must not repeat more than twice in a row.
 
 ## Duration Guidelines
 
@@ -163,10 +170,15 @@ class ScreenwriterAgent(AgentInterface):
         db.log(self.agent_name, chapter_id, "started", {"chapter_id": chapter_id})
 
         try:
-            # ── Call Claude ──
+            # ── Call LLM (needs high max_tokens — full chapter JSON is large) ──
             script_json = self.llm.generate_json(
                 system_prompt=SCREENWRITER_SYSTEM_PROMPT,
-                user_prompt=f"请将以下小说章节改编为分镜剧本（JSON 格式）：\n\n{raw_text}",
+                user_prompt=(
+                    f"请将以下小说章节改编为分镜剧本（JSON 格式）。"
+                    f"注意：整章控制在 8-15 个镜头以内，合并相邻的同类动作和对白。\n\n"
+                    f"{raw_text}"
+                ),
+                max_tokens=16384,
             )
 
             # ── Validate script structure ──

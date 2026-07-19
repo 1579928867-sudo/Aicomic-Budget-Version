@@ -102,6 +102,19 @@ class Orchestrator:
         characters = sw_data.get("characters", [])
         scenes_list = sw_data.get("scenes_list", [])
 
+        # Count shots for feedback
+        if script_id:
+            shot_row = self.db.conn.execute(
+                "SELECT COUNT(*) as cnt FROM storyboard_shot WHERE script_id = ?",
+                (script_id,),
+            ).fetchone()
+            shot_count = shot_row["cnt"] if shot_row else 0
+        else:
+            shot_count = 0
+
+        print(f"  ✓ Screenwriter: 脚本 #{script_id}, {len(characters)} 角色, "
+              f"{len(scenes_list)} 场景, {shot_count} 镜头")
+
         # ── Step 2: Character Designer ──
         char_variants = {}
         if script_id:
@@ -127,6 +140,10 @@ class Orchestrator:
             )
             # Non-fatal — continue with scene designer even if char designer fails
 
+        char_variants_created = char_result.data.get("variants_created", 0) if char_result.data else 0
+        char_names = char_result.data.get("character_names", []) if char_result.data else []
+        print(f"  ✓ Character Designer: {char_variants_created} 外观变体 ({', '.join(char_names) if char_names else 'N/A'})")
+
         # ── Step 3: Scene Designer ──
         scene_result = self.bus.run(
             "scene-designer",
@@ -146,6 +163,10 @@ class Orchestrator:
                 level="ERROR",
             )
 
+        scenes_updated = scene_result.data.get("scenes_updated", 0) if scene_result.data else 0
+        scene_names = scene_result.data.get("scene_names", []) if scene_result.data else []
+        print(f"  ✓ Scene Designer: {scenes_updated} 场景 ({', '.join(scene_names) if scene_names else 'N/A'})")
+
         # ── Step 3.5: Image Generator (optional) ──
         img_result = None
         if with_images and script_id:
@@ -154,7 +175,17 @@ class Orchestrator:
                 {"chapter_id": chapter_id, "script_id": script_id},
                 self.db,
             )
-            if not img_result.success:
+            if img_result.success:
+                imgs = img_result.data.get("images_generated", 0) if img_result.data else 0
+                vars_p = img_result.data.get("variants_processed", 0) if img_result.data else 0
+                scenes_p = img_result.data.get("scenes_processed", 0) if img_result.data else 0
+                if imgs > 0:
+                    print(f"  ✓ Image Generator: {imgs} 张图片 ({vars_p} 角色变体, {scenes_p} 场景)")
+                else:
+                    print(f"  ⚠ Image Generator: 0 张图片 (无可生成内容或全部失败)")
+            else:
+                err = img_result.error or "未知错误"
+                print(f"  ✗ Image Generator: 失败 — {err}")
                 self.db.log(
                     "orchestrator", chapter_id, "pipeline_failed",
                     {"failed_at": "image-generator", "error": img_result.error},
@@ -177,6 +208,9 @@ class Orchestrator:
                 {"failed_at": "shot-visualizer", "error": shot_vis_result.error},
                 level="ERROR",
             )
+
+        shots_vis = shot_vis_result.data.get("shots_processed", 0) if shot_vis_result.data else 0
+        print(f"  ✓ Shot Visualizer: {shots_vis} 镜头已生成分镜提示词")
 
         # ── Step 5: Video Generator (optional) ──
         video_result = None

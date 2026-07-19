@@ -149,6 +149,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
 
         with_images = getattr(args, "with_images", False)
         with_video = getattr(args, "with_video", False)
+        no_headless = getattr(args, "no_headless", False)
 
         # Resolve video_backend early for shared browser_client decision
         video_cfg = config.get("video", {})
@@ -161,9 +162,13 @@ def cmd_run(args: argparse.Namespace, config: dict):
         browser_client = None
         if with_images or (with_video and video_backend == "doubao"):
             doubao_cfg = config.get("doubao", {})
+            headless = False if no_headless else doubao_cfg.get("headless", True)
+            if no_headless:
+                print("Browser: 显示浏览器窗口 (--no-headless)")
             browser_client = DoubaoBrowserClient(
+                state_file=Path(doubao_cfg.get("state_file", "data/doubao_state.json")),
                 cookie_file=Path(doubao_cfg.get("cookie_file", "data/doubao_cookies.json")),
-                headless=doubao_cfg.get("headless", True),
+                headless=headless,
                 output_dir=doubao_cfg.get("output_dir", "data/"),
                 timeout_sec=doubao_cfg.get("timeout_sec", 300),
                 poll_interval_sec=doubao_cfg.get("poll_interval_sec", 3),
@@ -293,6 +298,12 @@ def main():
         choices=["mock", "doubao"],
         default=None,
         help="Video generator backend: mock (default, safe) or doubao (real generation)",
+    )
+    run_parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        default=False,
+        help="Show browser window during image/video generation (for debugging)",
     )
 
     args = parser.parse_args()

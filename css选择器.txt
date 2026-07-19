@@ -1,7 +1,0 @@
-图片生成提示词输入框：div[contenteditable="true"][role="textbox"]:has(p[data-placeholder="描述你想要的图片"])
-9：16比例：div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio9_16.png"])
-1：1比例：div[role="menuitem"][data-slot="dropdown-menu-item"]
-16：9比例：div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio16_9.png"])
-返回的文本（这里需要根据文本内容给出判断如：已生成或者无法生成）：<div class="container-enLQFx">
-生成的按钮：这里页面上没有明确按钮，请在提示词输入完毕后加上一个回车符，会自动开始生成
-下载的按钮（这里会生成3-4张图，而且是全部下载）：#chat-route-main > main > div > div.flex.h-full.w-full.flex-col.items-center > div > div.relative.w-\[calc\(100\%-var\(--scrollbar-width\,9px\)\)\].flex-shrink-0.pl-16.pr-7 > div > div > div > div > button
