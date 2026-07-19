@@ -33,6 +33,7 @@ SCENE_DESIGNER_SYSTEM_PROMPT = """You are a professional scene designer for Chin
         - `multi_view_prompt`: Top-to-bottom vertical layout — top = wide/panoramic view (全景广角，展示完整空间关系), middle = mid view (中景，展示核心活动区域), bottom = close-up view (特写，展示材质纹理与关键道具细节). Each section separated clearly.
         - The prompt MUST explicitly describe the layout: "场景多景别设定图，横向16:9，从上到下排列三个景别：上方为全景广角（展示完整空间关系），中间为中景（展示核心活动区域），下方为特写（展示材质纹理与关键道具细节）。"
         - Same rules as individual views: "不能出现其他人，无人纯场景，no humans, empty, landscape only", 写实电影感风格, 横向16:9, era style prefix for ancient settings, real environment backgrounds (NOT pure white).
+        - Then append full scene description details.
 
 ## Output Format
 
