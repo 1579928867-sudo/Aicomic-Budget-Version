@@ -40,6 +40,12 @@ CHAR_DESIGNER_SYSTEM_PROMPT = """You are a professional character designer for C
     - `back_view_prompt`: 背面全身站立图片，展示背面发型和服装背面设计，Same style and background as full_prompt. Emphasize back hair style, back clothing design, back accessories.
     All three-view prompts keep the same style prefix (古代仙侠风格 for ancient settings), same era background tag, same pure white background rule, and same 写实电影感风格.
 
+    11. **Composite three-view prompt (三视图合并提示词)**: For every variant, generate ONE composite prompt that renders front, side, and back views together in a single image:
+        - `three_view_prompt`: Left-to-right horizontal layout — left = side view (侧面全身站立), center = front view (正面特写全身站立), right = back view (背面全身站立). Same horizontal baseline, evenly spaced. Same style prefix (古代仙侠风格 for ancient, omitted for modern), same era tag (e.g. 【中国古代·仙侠】), pure white background (纯白色背景), 写实电影感风格.
+        - The prompt MUST explicitly describe the layout: "三视图角色设定图，纯白色背景。画面从左到右排列三个视角：左侧为侧面全身站立（展示身体侧轮廓与服装侧面细节），中间为正面全身站立（正面特写，人物居中），右侧为背面全身站立（展示背面发型与服装背面设计）。三视图间距均匀，同一水平线对齐。"
+        - Then append the full character appearance details (same level as full_prompt), describing features visible from all three angles collectively.
+        - "双手自然下垂，手里无任何物品" say once at the end — do NOT repeat per view.
+
 ## Output Format
 
 Return ONLY valid JSON in this exact structure (no other text):
@@ -69,7 +75,8 @@ Return ONLY valid JSON in this exact structure (no other text):
           "full_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，九头身比例，写实电影感风格，正面，站立的全身图片，图片人物背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂，手里无任何物品。",
           "front_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，九头身比例，写实电影感风格，正面特写全身站立图片，人物居中，图片人物背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂。",
           "side_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，写实电影感风格，侧面全身站立图片，展示身体侧轮廓和服装侧面细节，图片人物背景为纯白色。黑色长发束髻侧面，白玉发冠侧影；上身白色交领长袍侧面云纹刺绣；下身同色系长衫侧面，墨玉腰带；脚上黑色云纹布靴侧面；双手自然下垂。",
-          "back_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，写实电影感风格，背面全身站立图片，展示背面发型和服装背面设计，图片人物背景为纯白色。黑色长发束髻背面，白玉发冠背面；上身白色交领长袍背面云纹刺绣；下身同色系长衫背面，墨玉腰带；脚上黑色云纹布靴背面；双手自然下垂。"
+          "back_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，写实电影感风格，背面全身站立图片，展示背面发型和服装背面设计，图片人物背景为纯白色。黑色长发束髻背面，白玉发冠背面；上身白色交领长袍背面云纹刺绣；下身同色系长衫背面，墨玉腰带；脚上黑色云纹布靴背面；双手自然下垂。",
+          "three_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，写实电影感风格，三视图角色设定图，纯白色背景。画面从左到右排列三个视角：左侧为侧面全身站立（展示身体侧轮廓与服装侧面细节），中间为正面全身站立（正面特写，人物居中），右侧为背面全身站立（展示背面发型与服装背面设计）。三视图间距均匀，同一水平线对齐。黑色长发束髻，白玉发冠；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂，手里无任何物品。"
         }
       ]
     }
@@ -185,6 +192,12 @@ class CharacterDesignerAgent(AgentInterface):
                         back=variant.get("back_view_prompt", ""),
                     )
 
+                    # v0.7: save three_view_prompt
+                    db.update_appearance_variant_three_view_prompt(
+                        variant_id=variant_id,
+                        prompt=variant.get("three_view_prompt", ""),
+                    )
+
                     # Set as default look if this is the default variant
                     if variant_name == "default":
                         db.set_character_default_look(char_id, variant_id)
@@ -245,6 +258,7 @@ class CharacterDesignerAgent(AgentInterface):
             "front_view_prompt": variant.get("front_view_prompt", ""),
             "side_view_prompt": variant.get("side_view_prompt", ""),
             "back_view_prompt": variant.get("back_view_prompt", ""),
+            "three_view_prompt": variant.get("three_view_prompt", ""),
             "era_background": era_background,
         }
         return json.dumps(appearance, ensure_ascii=False)

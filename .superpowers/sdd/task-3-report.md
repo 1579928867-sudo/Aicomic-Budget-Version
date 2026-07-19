@@ -1,72 +1,51 @@
-# Task 3 Report: ImageGeneratorAgent
+# Task 3 Report: Char Designer — three_view_prompt Output
 
 ## Status: DONE
 
-### Commits
+### Commit
 ```
-61a3799 feat: add ImageGeneratorAgent — generate real images from view prompts via Doubao
-```
-
-### Files Created
-- `src/aicomic/agents/image_generator.py` — 219 lines; ImageGeneratorAgent implementing AgentInterface
-- `tests/test_image_generator.py` — 243 lines; 7 tests + FakeBrowserClient
-
-### Test Results
-```
-7 passed in 0.20s
+feat(char-designer): add three_view_prompt output for composite character views
 ```
 
-| Test | Result |
-|------|--------|
-| `test_validate_input_valid` | PASS |
-| `test_validate_input_missing_script_id` | PASS |
-| `test_validate_input_missing_chapter_id` | PASS |
-| `test_execute_success` | PASS — 6 images (3 variant views + 3 scene views) |
-| `test_execute_skips_when_already_done` | PASS — second run returns `{"status": "skipped"}` |
-| `test_execute_all_browser_calls_fail` | PASS — returns `success=False` with error |
-| `test_execute_no_variants_no_scenes` | PASS — returns `success=True` with 0 images |
+### Files Modified
+- `src/aicomic/agents/char_designer.py` — 265 lines (was 251). 4 changes:
 
-### Implementation Notes
+| # | Change | Lines |
+|---|--------|-------|
+| 1 | Added item 11 (Composite three-view prompt) to `CHAR_DESIGNER_SYSTEM_PROMPT` | 43-47 |
+| 2 | Added `three_view_prompt` field to example JSON variant | 79 |
+| 3 | Added `three_view_prompt` to `_build_appearance_json` output dict | 261 |
+| 4 | Added `db.update_appearance_variant_three_view_prompt(...)` call in `execute()` | 195-199 |
 
-**Agent behavior:**
-- Queries `appearance_variant` rows where `front_view != '' AND front_image == ''` and `scene_card` rows where `wide_view != '' AND wide_image == ''`
-- Generates images for all 3 views (front/side/back or wide/mid/close) using DoubaoBrowserClient
-- Skips empty view prompts gracefully
-- Distinguishes between "nothing to generate" (success=True) and "all attempts failed" (success=False)
-- Full idempotency via `get_agent_status` / `set_agent_status`
+### Verification
 
-**Key design decision:**
-- The brief specified two possible SQL approaches. I chose the simpler one: query `appearance_variant` directly without JOIN on `character_card`, since `character_card` has no `chapter_id` FK and we don't need chapter-scoped filtering here.
-
-### Concerns
-- No chapter-scoped filtering for variants/scenes — if multiple chapters share a DB, image generation may reprocess variants already handled by another chapter. The WHERE clause `front_image = ''` (and `wide_image = ''`) prevents redundant generation, so this is safe.
-- The `FakeBrowserClient` uses `/tmp/` file paths which work on Linux/macOS but the tests run on Windows; `Path("/tmp/...")` creates a valid path object on Windows (it doesn't validate existence), so the tests pass fine.
-
-## Fix: Critical — extract `_process_views` helper, reduce `execute()` to ~60 lines
-
-**Commit:** `refactor: extract _process_views helper, reduce execute() to ~60 lines, add type hint`
-
-### Changes
-- Added `from __future__ import annotations` (needed for forward reference `"DoubaoBrowserClient"`)
-- Added `Callable` to typing imports
-- Fixed `__init__` type hint: `browser_client: "DoubaoBrowserClient"` and return type `-> None`
-- Extracted `_process_views(db, chapter_id, rows, view_names, update_fn, entity_type)` — parameterized helper that handles the nested loop for any entity type
-- `execute()` reduced from 184 lines to ~60 lines: loads variants and scenes, delegates to `_process_views` twice, then determines result in a clean if/elif/else block
-
-### File changed
-- `src/aicomic/agents/image_generator.py` (221 → 142 lines)
-
-### Test Results
 ```
-7 passed in 0.18s
+> py -c "from src.aicomic.agents.char_designer import CharacterDesignerAgent, CHAR_DESIGNER_SYSTEM_PROMPT; print('OK:', len(CHAR_DESIGNER_SYSTEM_PROMPT))"
+OK: 6328
 ```
 
-| Test | Result |
-|------|--------|
-| `test_validate_input_valid` | PASS |
-| `test_validate_input_missing_script_id` | PASS |
-| `test_validate_input_missing_chapter_id` | PASS |
-| `test_execute_success` | PASS |
-| `test_execute_skips_when_already_done` | PASS |
-| `test_execute_all_browser_calls_fail` | PASS |
-| `test_execute_no_variants_no_scenes` | PASS |
+- Module loads without errors
+- AST parse confirms valid Python syntax
+- `update_appearance_variant_three_view_prompt` method confirmed present in `repository.py` (line 404)
+
+### Implementation Details
+
+**Step 1 — System prompt item 11:** Appended after item 10's closing line. Instructs LLM to generate a `three_view_prompt`: a single composite prompt describing a left-to-right layout (side, front, back views) on pure white background, with explicit layout description in Chinese, followed by collective appearance details.
+
+**Step 2 — Example JSON:** Added `"three_view_prompt"` after `"back_view_prompt"` in the example variant, following the same indentation and quoting style. The example value demonstrates the composite format with the layout description and collective details.
+
+**Step 3 — `_build_appearance_json`:** Added `"three_view_prompt": variant.get("three_view_prompt", "")` to the appearance dict, after `"back_view_prompt"` and before `"era_background"`. Uses the same `variant.get()` pattern as all other fields.
+
+**Step 4 — DB save:** Added the `db.update_appearance_variant_three_view_prompt()` call after the existing `db.update_appearance_variant_views()` call (v0.5), preserving the chronological ordering of version comments in the code.
+
+### Self-Review
+
+- All existing code and comments remain intact
+- The `three_view_prompt` field follows the exact same patterns as `front_view_prompt` / `side_view_prompt` / `back_view_prompt`
+- The example prompt text accurately implements the format described in item 11
+- No new dependencies or imports introduced
+- Method signature matches existing `repository.py` interface
+
+### Concerns / Open Questions
+
+None.
