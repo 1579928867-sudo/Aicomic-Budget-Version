@@ -158,6 +158,11 @@ class Database:
             "ALTER TABLE scene_card ADD COLUMN wide_image TEXT DEFAULT ''",
             "ALTER TABLE scene_card ADD COLUMN mid_image TEXT DEFAULT ''",
             "ALTER TABLE scene_card ADD COLUMN close_image TEXT DEFAULT ''",
+            # v0.7: add three-view / multi-view prompt and image columns
+            "ALTER TABLE appearance_variant ADD COLUMN three_view_prompt TEXT DEFAULT ''",
+            "ALTER TABLE appearance_variant ADD COLUMN three_view_image TEXT DEFAULT ''",
+            "ALTER TABLE scene_card ADD COLUMN multi_view_prompt TEXT DEFAULT ''",
+            "ALTER TABLE scene_card ADD COLUMN multi_view_image TEXT DEFAULT ''",
         ]
         for sql in migrations:
             try:
@@ -339,6 +344,14 @@ class Database:
         )
         self.conn.commit()
 
+    def update_scene_card_multi_view_prompt(self, scene_id: int, prompt: str):
+        """Update multi_view_prompt column on a scene_card."""
+        self.conn.execute(
+            "UPDATE scene_card SET multi_view_prompt = ? WHERE id = ?",
+            (prompt, scene_id),
+        )
+        self.conn.commit()
+
     def get_scene_by_name(self, chapter_id: int, name: str) -> dict | None:
         """Get scene_card row by name (scenes are global, not chapter-scoped)."""
         row = self.conn.execute(
@@ -388,6 +401,16 @@ class Database:
         )
         self.conn.commit()
 
+    def update_appearance_variant_three_view_prompt(
+        self, variant_id: int, prompt: str
+    ):
+        """Update three_view_prompt column on an appearance_variant."""
+        self.conn.execute(
+            "UPDATE appearance_variant SET three_view_prompt = ? WHERE id = ?",
+            (prompt, variant_id),
+        )
+        self.conn.commit()
+
     def update_appearance_variant_image(
         self, variant_id: int, view: str, file_path: str
     ):
@@ -404,6 +427,16 @@ class Database:
         )
         self.conn.commit()
 
+    def update_appearance_variant_three_view(
+        self, variant_id: int, file_path: str
+    ):
+        """Update three_view_image column on an appearance_variant."""
+        self.conn.execute(
+            "UPDATE appearance_variant SET three_view_image = ? WHERE id = ?",
+            (file_path, variant_id),
+        )
+        self.conn.commit()
+
     def update_scene_card_image(
         self, scene_id: int, view: str, file_path: str
     ):
@@ -416,6 +449,14 @@ class Database:
         column = f"{view}_image"
         self.conn.execute(
             f"UPDATE scene_card SET {column} = ? WHERE id = ?",
+            (file_path, scene_id),
+        )
+        self.conn.commit()
+
+    def update_scene_card_multi_view(self, scene_id: int, file_path: str):
+        """Update multi_view_image column on a scene_card."""
+        self.conn.execute(
+            "UPDATE scene_card SET multi_view_image = ? WHERE id = ?",
             (file_path, scene_id),
         )
         self.conn.commit()
