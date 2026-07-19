@@ -121,7 +121,7 @@ Return ONLY valid JSON in this exact structure (no other text):
 - **era_background**: Detect the story's era setting. MUST be one of: "中国古代·仙侠", "中国古代·武侠", "中国古代·宫廷", "中国现代·都市", "中国现代·校园", "民国", "西方奇幻", "科幻未来", "架空世界". Use the most specific match.
 - **shot_num**: Globally sequential across ALL scenes (1, 2, 3, ... N).
 - **shot_type**: One of "action", "dialogue", "both".
-- **characters**: Array of {"name": "...", "variant": "..."} for every character appearing in this shot. Use "default" for standard appearance; create descriptive variant names when clothing/appearance changes (e.g., "夜行衣", "受伤后", "翠绿长裙").
+- **characters**: Array of {"name": "...", "variant": "..."} for every character appearing in this shot. Use "default" for the character's current chapter appearance. Only use a non-default variant name when the SAME character appears with MULTIPLE distinct looks within this chapter (e.g., first half in regular clothes, later in "夜行衣"; first healthy then "受伤后"). Do NOT use variant to describe the character's sole outfit — if they only wear one thing this chapter, that IS "default".
 - **narration**: Visual description of what the viewer sees. Can be empty string if shot is pure dialogue.
 - **dialogue**: Character speech in "Name: 内容" format. Can be empty string if shot is pure action.
 - **camera_movement**: MUST be one of the 10 camera type values listed above.
