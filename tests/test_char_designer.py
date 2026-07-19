@@ -93,6 +93,7 @@ def _make_db():
     db = Database(db_path)
     db.connect()
     db.init_schema()
+    db.migrate_schema()
     return db, db_path
 
 

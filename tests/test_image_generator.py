@@ -20,10 +20,12 @@ class FakeBrowserClient:
         self.call_count += 1
         self.prompts.append(prompt)
         if self.will_fail:
-            return ImageResult(success=False, file_path="", error="Fake error")
+            return ImageResult(success=False, file_path="", file_paths=[], error="Fake error")
+        path = f"/tmp/fake_image_{self.call_count}.png"
         return ImageResult(
             success=True,
-            file_path=f"/tmp/fake_image_{self.call_count}.png",
+            file_path=path,
+            file_paths=[path],
             url=f"https://example.com/img_{self.call_count}.png",
             metadata={"generator": "fake"},
         )
@@ -41,12 +43,12 @@ def _make_db():
 
 
 def _setup_full_data(db: Database) -> tuple[int, int]:
-    """Create novel, chapter, script, char variants and scene cards with view prompts."""
+    """Create novel, chapter, script, char variants and scene cards with composite prompts."""
     novel_id = db.create_novel("测试", "")
     chapter_id = db.create_chapter(novel_id, 1, "内容")
     script_id = db.save_script(chapter_id, {"scenes": [], "characters": [], "scenes_list": []})
 
-    # Create a character with variant + view prompts
+    # Create a character with variant + three_view_prompt (composite prompt)
     char_id, _ = db.get_or_create_character("叶凡")
     variant_id = db.create_appearance_variant(
         character_id=char_id,
@@ -54,24 +56,23 @@ def _setup_full_data(db: Database) -> tuple[int, int]:
         variant_type="default",
         appearance_json='{"full_prompt": "test"}',
     )
-    db.update_appearance_variant_views(
+    db.update_appearance_variant_three_view_prompt(
         variant_id=variant_id,
-        front="正面视图prompt",
-        side="侧面视图prompt",
-        back="背面视图prompt",
+        prompt="正面侧面背面三视图组合prompt",
     )
     db.set_character_default_look(char_id, variant_id)
 
-    # Create a scene with view prompts
+    # Create a scene with multi_view_prompt (composite prompt)
     scene_id = db.get_or_create_scene("山门")
     db.update_scene_card(
         scene_id=scene_id,
         description="巍峨山门",
         lighting="晨光金色",
         style="中式仙侠",
-        wide_view="全景广角视图prompt",
-        mid_view="中景核心区域prompt",
-        close_view="特写细节prompt",
+    )
+    db.update_scene_card_multi_view_prompt(
+        scene_id=scene_id,
+        prompt="全景中景特写组合prompt",
     )
 
     return chapter_id, script_id
@@ -108,31 +109,27 @@ def test_execute_success():
 
         assert result.success is True
         assert result.data is not None
-        # 1 variant × 3 views + 1 scene × 3 views = 6 images
-        assert result.data["images_generated"] == 6
+        # 1 variant x 1 composite prompt + 1 scene x 1 composite prompt = 2 images
+        assert result.data["images_generated"] == 2
         assert result.data["variants_processed"] == 1
         assert result.data["scenes_processed"] == 1
-        assert fake_browser.call_count == 6
+        assert fake_browser.call_count == 2
 
-        # Verify DB: variant images populated
+        # Verify DB: variant three_view_image populated (composite column)
         variants = db.conn.execute(
             "SELECT * FROM appearance_variant ORDER BY id"
         ).fetchall()
         for v in variants:
             vd = dict(v)
-            assert vd["front_image"] != "", "front_image should be populated"
-            assert vd["side_image"] != "", "side_image should be populated"
-            assert vd["back_image"] != "", "back_image should be populated"
+            assert vd["three_view_image"] != "", "three_view_image should be populated"
 
-        # Verify DB: scene images populated
+        # Verify DB: scene multi_view_image populated (composite column)
         scenes = db.conn.execute(
             "SELECT * FROM scene_card ORDER BY id"
         ).fetchall()
         for s in scenes:
             sd = dict(s)
-            assert sd["wide_image"] != "", "wide_image should be populated"
-            assert sd["mid_image"] != "", "mid_image should be populated"
-            assert sd["close_image"] != "", "close_image should be populated"
+            assert sd["multi_view_image"] != "", "multi_view_image should be populated"
 
         # Verify agent status marked done
         assert db.get_agent_status("image-generator", chapter_id) == "done"
