@@ -29,6 +29,10 @@ SCENE_DESIGNER_SYSTEM_PROMPT = """You are a professional scene designer for Chin
     - `mid_view_prompt`: 中景展示场景核心区域，展示主要活动空间和关键建筑/道具。Camera at mid distance, focusing on the primary activity zone.
     - `close_view_prompt`: 特写展示场景关键细节，展示材质纹理、装饰图案、关键道具。Extreme close-up on materials, textures, ornamentation, or key props.
     All three-view prompts must follow the same rules: no humans (不能出现其他人), 写实电影感风格, 横向16:9, era style prefix (古代仙侠风格 for ancient settings), NO pure white background (real environment backgrounds).
+    10. **Composite multi-view scene prompt (场景多景别合并提示词)**: For every scene, generate ONE composite prompt that renders all three camera distances together in a single image:
+        - `multi_view_prompt`: Top-to-bottom vertical layout — top = wide/panoramic view (全景广角，展示完整空间关系), middle = mid view (中景，展示核心活动区域), bottom = close-up view (特写，展示材质纹理与关键道具细节). Each section separated clearly.
+        - The prompt MUST explicitly describe the layout: "场景多景别设定图，横向16:9，从上到下排列三个景别：上方为全景广角（展示完整空间关系），中间为中景（展示核心活动区域），下方为特写（展示材质纹理与关键道具细节）。"
+        - Same rules as individual views: "不能出现其他人，无人纯场景，no humans, empty, landscape only", 写实电影感风格, 横向16:9, era style prefix for ancient settings, real environment backgrounds (NOT pure white).
 
 ## Output Format
 
@@ -49,7 +53,8 @@ Return ONLY valid JSON in this exact structure (no other text):
       "full_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，全景展示场景全貌，横向16:9电影级场景设定图，极高画质，纯净无人的空间。萧澈卧室｜长方形中式古典卧室，深约5米宽约4米，地面深色木质地板，墙面浅米色墙纸，雕花窗棂透入柔和晨光，松软雕花大床垂下红色曼联，床头大红喜字贴窗，喜庆中带着昏沉，暖黄色调。",
       "wide_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，全景广角展示场景全貌，横向16:9电影级场景设定图。萧澈卧室｜长方形中式古典卧室全景，深约5米宽约4米，地面深色木质地板延伸至远端，墙面浅米色墙纸，雕花窗棂在左侧透入柔和晨光，松软雕花大床居中偏右，红色曼联垂下，床头矮柜和铜镜妆台在画面右侧。",
       "mid_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，中景展示场景核心区域，横向16:9电影级场景设定图。萧澈卧室｜雕花大床中景，红色曼联纹理清晰，床头大红喜字贴窗细节，松软床铺褶皱可见，暖黄色调晨光从左侧窗棂洒入床面。",
-      "close_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，特写展示场景关键细节，横向16:9电影级场景设定图。萧澈卧室｜铜镜妆台特写，铜镜表面反射柔和暖光，镜边雕花纹样精细，妆台上散落红绸和梳妆小物，材质质感清晰。"
+      "close_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，特写展示场景关键细节，横向16:9电影级场景设定图。萧澈卧室｜铜镜妆台特写，铜镜表面反射柔和暖光，镜边雕花纹样精细，妆台上散落红绸和梳妆小物，材质质感清晰。",
+      "multi_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，场景多景别设定图，横向16:9，从上到下排列三个景别：上方为全景广角（展示完整空间关系），中间为中景（展示核心活动区域），下方为特写（展示材质纹理与关键道具细节）。萧澈卧室｜长方形中式古典卧室，深约5米宽约4米，地面深色木质地板，墙面浅米色墙纸，雕花窗棂透入柔和晨光，松软雕花大床垂下红色曼联，床头大红喜字贴窗，喜庆中带着昏沉，暖黄色调。"
     }
   ]
 }
@@ -131,6 +136,12 @@ class SceneDesignerAgent(AgentInterface):
                     wide_view=scene_data.get("wide_view_prompt", ""),
                     mid_view=scene_data.get("mid_view_prompt", ""),
                     close_view=scene_data.get("close_view_prompt", ""),
+                )
+
+                # v0.7: save multi_view_prompt
+                db.update_scene_card_multi_view_prompt(
+                    scene_id=scene_id,
+                    prompt=scene_data.get("multi_view_prompt", ""),
                 )
 
             # ── Mark done ──
