@@ -66,6 +66,7 @@ doubao:
 video:
   generator: "mock"               # mock | doubao — which VideoGenerator to use
   output_dir: "data/videos/"       # where generated video clips are saved
+  shot_video_duration_sec: 5       # default duration per shot video (test phase)
 
 logging:
   level: "INFO"

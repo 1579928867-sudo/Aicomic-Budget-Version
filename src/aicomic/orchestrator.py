@@ -1,6 +1,7 @@
 """Orchestrator — coordinates the multi-agent pipeline.
 
-v0.5 pipeline: Screenwriter → CharDesigner → SceneDesigner → ShotVisualizer → VideoGenerator → VideoComposer
+v0.8 pipeline: Screenwriter → CharDesigner → SceneDesigner → ImageGenerator
+→ ShotVisualizer → ShotVideoGenerator → VideoGenerator → VideoComposer
 """
 
 import json
@@ -212,6 +213,35 @@ class Orchestrator:
         shots_vis = shot_vis_result.data.get("shots_processed", 0) if shot_vis_result.data else 0
         print(f"  ✓ Shot Visualizer: {shots_vis} 镜头已生成分镜提示词")
 
+        # ── Step 4.5: Shot Video Generator (optional, image-to-video per shot) ──
+        shot_video_result = None
+        if with_video and script_id:
+            shot_video_result = self.bus.run(
+                "shot-video-generator",
+                {"chapter_id": chapter_id, "script_id": script_id},
+                self.db,
+            )
+            if shot_video_result.success:
+                sc = shot_video_result.data.get("clips_created", 0) if shot_video_result.data else 0
+                st = shot_video_result.data.get("total_shots", 0) if shot_video_result.data else 0
+                if sc > 0:
+                    print(f"  ✓ Shot Video Generator: {sc}/{st} 视频片段")
+                elif shot_video_result.data.get("skipped_all"):
+                    print(f"  ⏭ Shot Video Generator: 全部已生成，跳过")
+                else:
+                    print(f"  ⚠ Shot Video Generator: 0/{st} 成功")
+            else:
+                err = shot_video_result.error or "未知错误"
+                if "not registered" in err:
+                    print(f"  ⏭ Shot Video Generator: 未注册（非 doubao 后端），跳过")
+                else:
+                    print(f"  ✗ Shot Video Generator: 失败 — {err}")
+                    self.db.log(
+                        "orchestrator", chapter_id, "pipeline_step_failed",
+                        {"step": "shot-video-generator", "error": err},
+                        level="WARNING",
+                    )
+
         # ── Step 5: Video Generator (optional) ──
         video_result = None
         if with_video and script_id:
@@ -250,6 +280,7 @@ class Orchestrator:
                 "scene_designer": "ok" if scene_result.success else "failed",
                 "image_generator": "ok" if (img_result and img_result.success) else ("skipped" if not with_images else "failed"),
                 "shot_visualizer": "ok" if shot_vis_result.success else "failed",
+                "shot_video_generator": "ok" if (shot_video_result and shot_video_result.success) else ("skipped" if not with_video else "failed"),
                 "video_generator": "ok" if (video_result and video_result.success) else ("skipped" if not with_video else "failed"),
                 "video_composer": "ok" if (composer_result and composer_result.success) else ("skipped" if not with_video else "failed"),
             },
@@ -268,6 +299,7 @@ class Orchestrator:
                 "variants_processed": img_result.data.get("variants_processed", 0) if (img_result and img_result.data) else 0,
                 "scenes_processed": img_result.data.get("scenes_processed", 0) if (img_result and img_result.data) else 0,
                 "shots_visualized": shot_vis_result.data.get("shots_processed", 0) if shot_vis_result.data else 0,
+                "shot_video_clips": shot_video_result.data.get("clips_created", 0) if (shot_video_result and shot_video_result.data) else 0,
                 "clips_created": video_result.data.get("clips_created", 0) if (video_result and video_result.data) else 0,
                 "final_video_path": composer_result.data.get("final_video_path") if (composer_result and composer_result.data) else None,
                 "clip_count": composer_result.data.get("clip_count", 0) if (composer_result and composer_result.data) else 0,

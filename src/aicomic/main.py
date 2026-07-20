@@ -101,6 +101,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
     from .agents.video_composer import VideoComposerAgent
     from .doubao.client import MockVideoGenerator, DoubaoVideoGenerator
     from .agents.image_generator import ImageGeneratorAgent
+    from .agents.shot_video_generator import ShotVideoGeneratorAgent
     from .doubao.browser import DoubaoBrowserClient
     from .orchestrator import Orchestrator
 
@@ -187,6 +188,17 @@ def cmd_run(args: argparse.Namespace, config: dict):
         if with_video:
             if video_backend == "doubao":
                 doubao_cfg = config.get("doubao", {})
+                shot_duration = float(
+                    video_cfg.get("shot_video_duration_sec", 5)
+                )
+                # v0.8: Shot-based video generation (image-to-video on image page)
+                shot_video_gen = ShotVideoGeneratorAgent(
+                    browser_client=browser_client,
+                    duration_sec=shot_duration,
+                )
+                bus.register(shot_video_gen)
+
+                # Legacy: direct video page generator (kept for reference)
                 video_gen = DoubaoVideoGenerator(
                     cookie_file=Path(doubao_cfg.get("cookie_file", "data/doubao_cookies.json")),
                     headless=doubao_cfg.get("headless", True),
@@ -195,7 +207,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
                     poll_interval_sec=doubao_cfg.get("poll_interval_sec", 3),
                     video_page_url=doubao_cfg.get("video_page_url", "https://jimeng.jianying.com/ai-tool/video/generate"),
                     selectors=doubao_cfg.get("selectors", {}).get("video", {}),
-                    browser_client=browser_client,  # v0.6: shared
+                    browser_client=browser_client,
                 )
             else:
                 video_gen = MockVideoGenerator(output_dir=video_output_dir)
@@ -211,11 +223,14 @@ def cmd_run(args: argparse.Namespace, config: dict):
         orchestrator = Orchestrator(bus, db)
 
         # ── Run ──
-        pipeline_label = "v0.6"
+        pipeline_label = "v0.8"
         steps = "Screenwriter → CharDesigner → SceneDesigner"
         steps += " → ImageGenerator" if with_images else ""
         steps += " → ShotVisualizer"
-        steps += " → VideoGenerator → VideoComposer" if with_video else ""
+        if with_video:
+            if video_backend == "doubao":
+                steps += " → ShotVideoGenerator"
+            steps += " → VideoGenerator → VideoComposer"
         print(f"Running pipeline ({pipeline_label}: {steps})...")
         result = orchestrator.run_chapter(
             chapter_id, raw_text, with_video=with_video, with_images=with_images,

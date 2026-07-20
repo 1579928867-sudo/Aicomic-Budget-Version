@@ -30,8 +30,10 @@ SCENE_DESIGNER_SYSTEM_PROMPT = """You are a professional scene designer for Chin
     - `close_view_prompt`: 特写展示场景关键细节，展示材质纹理、装饰图案、关键道具。Extreme close-up on materials, textures, ornamentation, or key props.
     All three-view prompts must follow the same rules: no humans (不能出现其他人), 写实电影感风格, 横向16:9, era style prefix (古代仙侠风格 for ancient settings), NO pure white background (real environment backgrounds).
     10. **Composite multi-view scene prompt (场景多景别合并提示词)**: For every scene, generate ONE composite prompt that renders all three camera distances together in a single image:
-        - `multi_view_prompt`: Top-to-bottom vertical layout — top = wide/panoramic view (全景广角，展示完整空间关系), middle = mid view (中景，展示核心活动区域), bottom = close-up view (特写，展示材质纹理与关键道具细节). Each section separated clearly.
-        - The prompt MUST explicitly describe the layout: "场景多景别设定图，横向16:9，从上到下排列三个景别：上方为全景广角（展示完整空间关系），中间为中景（展示核心活动区域），下方为特写（展示材质纹理与关键道具细节）。"
+        - `multi_view_prompt`: Top-to-bottom vertical layout — top = wide/panoramic view (全景广角，展示完整空间关系), middle = mid view (中景，展示核心活动区域), bottom = close-up view (特写，展示材质纹理与关键道具细节).
+        - **白线分隔**: 不同景别区域之间用粗白线（约 3px）水平贯穿画面分隔。白线清晰可见，笔直横跨整个画幅宽度。
+        - **文字标签**: 每个景别区域的左上角标注白色文字标签 —— 上方区域标注「远景」、中间区域标注「中景」、下方区域标注「特写」。标签使用白色无衬线字体，字号适中，清晰可读，不遮挡画面主体内容。
+        - The prompt MUST explicitly describe the layout: "场景多景别设定图，横向16:9，从上到下排列三个景别：上方为全景广角（展示完整空间关系），中间为中景（展示核心活动区域），下方为特写（展示材质纹理与关键道具细节）。三个区域之间用粗白线水平分隔，每个区域左上角标注白色文字标签（远景/中景/特写）。"
         - Same rules as individual views: "不能出现其他人，无人纯场景，no humans, empty, landscape only", 写实电影感风格, 横向16:9, era style prefix for ancient settings, real environment backgrounds (NOT pure white).
         - Then append full scene description details.
 
@@ -55,7 +57,7 @@ Return ONLY valid JSON in this exact structure (no other text):
       "wide_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，全景广角展示场景全貌，横向16:9电影级场景设定图。萧澈卧室｜长方形中式古典卧室全景，深约5米宽约4米，地面深色木质地板延伸至远端，墙面浅米色墙纸，雕花窗棂在左侧透入柔和晨光，松软雕花大床居中偏右，红色曼联垂下，床头矮柜和铜镜妆台在画面右侧。",
       "mid_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，中景展示场景核心区域，横向16:9电影级场景设定图。萧澈卧室｜雕花大床中景，红色曼联纹理清晰，床头大红喜字贴窗细节，松软床铺褶皱可见，暖黄色调晨光从左侧窗棂洒入床面。",
       "close_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，特写展示场景关键细节，横向16:9电影级场景设定图。萧澈卧室｜铜镜妆台特写，铜镜表面反射柔和暖光，镜边雕花纹样精细，妆台上散落红绸和梳妆小物，材质质感清晰。",
-      "multi_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，场景多景别设定图，横向16:9，从上到下排列三个景别：上方为全景广角（展示完整空间关系），中间为中景（展示核心活动区域），下方为特写（展示材质纹理与关键道具细节）。萧澈卧室｜长方形中式古典卧室，深约5米宽约4米，地面深色木质地板，墙面浅米色墙纸，雕花窗棂透入柔和晨光，松软雕花大床垂下红色曼联，床头大红喜字贴窗，喜庆中带着昏沉，暖黄色调。"
+      "multi_view_prompt": "不能出现其他人，无人纯场景，no humans,empty,landscape only，古代仙侠风格，【中国古代·仙侠】写实电影感风格，场景多景别设定图，横向16:9，从上到下排列三个景别：上方为全景广角（展示完整空间关系），中间为中景（展示核心活动区域），下方为特写（展示材质纹理与关键道具细节）。三个区域之间用粗白线（3px）水平贯穿画面分隔，上方区域左上角标注白色文字「远景」、中间区域左上角标注「中景」、下方区域左上角标注「特写」。萧澈卧室｜长方形中式古典卧室，深约5米宽约4米，地面深色木质地板，墙面浅米色墙纸，雕花窗棂透入柔和晨光，松软雕花大床垂下红色曼联，床头大红喜字贴窗，喜庆中带着昏沉，暖黄色调。"
     }
   ]
 }

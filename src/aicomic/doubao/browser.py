@@ -531,7 +531,255 @@ class DoubaoBrowserClient:
         except Exception:
             pass  # Ratio selector not found, use default
 
-    # ── Core: Video generation ──
+    # ── Core: Shot video generation (image-to-video on image page) ──
+
+    def generate_video_from_images(
+        self, prompt: str, reference_images: list[str], duration_sec: float = 5.0
+    ) -> ImageResult:
+        """Generate a video from reference images + prompt via Doubao image page.
+
+        Reuses the text-to-image page (create-image), pasting reference images
+        and a "生成视频，5s，..." prompt. Doubao detects the video prefix and
+        switches to its video generation model (Seedance), returning an mp4.
+
+        Args:
+            prompt: Chinese video generation prompt, must start with "生成视频，Xs，".
+            reference_images: Local file paths to paste as visual reference.
+            duration_sec: Target duration in seconds (for metadata only).
+
+        Returns:
+            ImageResult with success status and downloaded mp4 file paths.
+        """
+        import base64
+
+        self._wait_rate_limit()
+        video_dir = self.output_dir / "videos"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        vid_id = uuid.uuid4().hex[:8]
+
+        try:
+            self.ensure_browser()
+            page = self._context.new_page()
+
+            # Grant clipboard permissions for image paste
+            try:
+                self._context.grant_permissions(["clipboard-read", "clipboard-write"])
+            except Exception:
+                pass  # Permissions may already be granted
+
+            try:
+                # ── 1. Navigate to image creation page ──
+                page.set_default_timeout(self.timeout_sec * 1000)
+                page.goto(self.page_urls["image"], wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(2000)
+
+                # ── 2. Check login ──
+                if "login" in page.url.lower() or "passport" in page.url.lower():
+                    raise CookieExpiredError(
+                        "Doubao cookies expired. Please re-export cookies."
+                    )
+
+                # ── 3. Find and prepare the prompt input ──
+                sel = self.selectors["image"]
+                prompt_selector = sel.get("prompt_input", 'div[contenteditable="true"]')
+                try:
+                    page.wait_for_selector(prompt_selector, timeout=10000)
+                except Exception:
+                    prompt_selector = 'div[contenteditable="true"]'
+                    page.wait_for_selector(prompt_selector, timeout=10000)
+
+                # ── 4. Paste reference images via CDP clipboard ──
+                valid_images = [p for p in reference_images if Path(p).exists()]
+                if valid_images:
+                    for img_path in valid_images:
+                        self._paste_image_to_input(page, prompt_selector, img_path)
+                        time.sleep(0.8)  # Let Doubao UI process each paste
+                else:
+                    print(f"    [Doubao] ⚠ 无有效参考图片，继续纯文本生成")
+
+                # ── 5. Type video prompt ──
+                page.click(prompt_selector)
+                time.sleep(0.3)
+                # Append prompt after pasted images; don't clear — images are already sent
+                page.keyboard.insert_text(prompt)
+                time.sleep(1.5)
+
+                # ── 6. Click send ──
+                send_clicked = self._click_send_button(page)
+                if not send_clicked:
+                    time.sleep(2)
+                    send_clicked = self._click_send_button(page)
+                if not send_clicked:
+                    page.click(prompt_selector)
+                    time.sleep(0.3)
+                    page.keyboard.press("Enter")
+                time.sleep(2.0)
+
+                # ── 7. Poll for video completion ──
+                start = time.time()
+                video_urls: list[str] = []
+                while time.time() - start < self.timeout_sec:
+                    urls = self._find_video_urls(page)
+                    if urls:
+                        video_urls = urls
+                        break
+
+                    # Check for failure keywords
+                    body_text = page.inner_text("body")
+                    for kw in sel.get("status_failed_keywords", []):
+                        if kw in body_text:
+                            return ImageResult(
+                                success=False, file_path="",
+                                error=f"Video generation failed (keyword: '{kw}')",
+                            )
+
+                    elapsed = time.time() - start
+                    if int(elapsed) % 30 == 0 and int(elapsed) > 0:
+                        print(f"    [Doubao] 等待视频生成... ({int(elapsed)}s)")
+
+                    time.sleep(self.poll_interval_sec)
+
+                if not video_urls:
+                    debug_dir = self.output_dir / "debug"
+                    debug_dir.mkdir(parents=True, exist_ok=True)
+                    debug_path = str(debug_dir / f"doubao_video_timeout_{vid_id}.png")
+                    page.screenshot(path=debug_path, full_page=False)
+                    print(f"    [Doubao] ⚠ 视频超时 ({int(time.time()-start)}s), 截图: {debug_path}")
+                    return ImageResult(
+                        success=False, file_path="",
+                        error="Video generation timed out or failed",
+                    )
+
+                # ── 8. Download mp4 files ──
+                downloaded = []
+                for i, vurl in enumerate(video_urls):
+                    result_path = self._download_video_url(page, vurl, video_dir, i)
+                    if result_path:
+                        downloaded.append(result_path)
+
+                if downloaded:
+                    return ImageResult(
+                        success=True,
+                        file_path=downloaded[0],
+                        file_paths=downloaded,
+                        metadata={"generator": "doubao", "video_id": vid_id,
+                                   "duration_sec": duration_sec,
+                                   "total_downloaded": len(downloaded)},
+                    )
+                return ImageResult(
+                    success=False, file_path="",
+                    error="Failed to download any generated video",
+                )
+
+            finally:
+                page.close()
+
+        except CookieExpiredError:
+            raise
+        except Exception as e:
+            return ImageResult(
+                success=False, file_path="",
+                error=f"Doubao video-from-images generation failed: {e}",
+            )
+
+    def _paste_image_to_input(self, page, prompt_selector: str, image_path: str):
+        """Paste a local image file into the Doubao input via CDP clipboard.
+
+        Reads the image, writes it to the system clipboard as image/png
+        via a page JS call, then sends Ctrl+V into the contenteditable input.
+        """
+        import base64
+        from pathlib import Path
+
+        img_path = Path(image_path)
+        if not img_path.exists():
+            print(f"    [Doubao] ⚠ 图片不存在: {image_path}")
+            return
+
+        # Read and encode image
+        with open(img_path, "rb") as f:
+            img_bytes = f.read()
+        b64 = base64.b64encode(img_bytes).decode("ascii")
+        size_kb = len(img_bytes) // 1024
+        print(f"    [Doubao] 粘贴参考图: {img_path.name} ({size_kb}KB)")
+
+        # Write to clipboard via page JS
+        page.evaluate("""(b64) => {
+            const byteChars = atob(b64);
+            const byteArr = new Uint8Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) {
+                byteArr[i] = byteChars.charCodeAt(i);
+            }
+            const blob = new Blob([byteArr], {type: 'image/png'});
+            const item = new ClipboardItem({'image/png': blob});
+            return navigator.clipboard.write([item]);
+        }""", b64)
+        time.sleep(0.5)
+
+        # Click input and paste
+        page.click(prompt_selector)
+        time.sleep(0.3)
+        page.keyboard.press("Control+v")
+        time.sleep(1.0)
+        # Press Enter to confirm the image attachment
+        page.keyboard.press("Enter")
+        time.sleep(0.5)
+
+    def _find_video_urls(self, page) -> list[str]:
+        """Find <video> elements on the page and return their src URLs."""
+        return page.evaluate("""() => {
+            const videos = document.querySelectorAll('video');
+            const urls = [];
+            videos.forEach(v => {
+                const src = v.src || v.getAttribute('src') || '';
+                if (src && src.startsWith('http')) urls.push(src);
+                // Also check <source> children
+                v.querySelectorAll('source').forEach(s => {
+                    const ssrc = s.src || s.getAttribute('src') || '';
+                    if (ssrc && ssrc.startsWith('http')) urls.push(ssrc);
+                });
+            });
+            return [...new Set(urls)];
+        }""")
+
+    def _download_video_url(
+        self, page, video_url: str, out_dir: Path, index: int
+    ) -> str | None:
+        """Download a video from URL using browser cookies for auth."""
+        import requests
+
+        cookies = {}
+        if self._context:
+            for c in self._context.cookies():
+                cookies[c["name"]] = c["value"]
+
+        try:
+            resp = requests.get(video_url, cookies=cookies, timeout=300,
+                               headers={"Referer": "https://www.doubao.com/"})
+            resp.raise_for_status()
+
+            vid_id = uuid.uuid4().hex[:8]
+            ext = ".mp4"
+            content_type = resp.headers.get("Content-Type", "")
+            if "video/mp4" in content_type:
+                ext = ".mp4"
+            elif "video/webm" in content_type:
+                ext = ".webm"
+
+            output_path = str(out_dir / f"doubao_{vid_id}{ext}")
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+
+            size_mb = len(resp.content) / (1024 * 1024)
+            print(f"    [Doubao] ✓ 已下载视频 #{index+1} ({size_mb:.1f}MB) → "
+                  f"{Path(output_path).name}")
+            return output_path
+
+        except Exception as e:
+            print(f"    [Doubao] ✗ 视频下载失败 #{index+1}: {e}")
+            return None
+
+    # ── Core: Video generation (direct video page, legacy) ──
 
     def generate_video(
         self, prompt: str, duration_sec: float = 5.0
