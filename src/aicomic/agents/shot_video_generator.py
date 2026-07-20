@@ -130,6 +130,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
         motion = camera_motion_map.get(camera, "镜头稳定，画面自然呈现")
 
         parts = [
+            "这是我用AI生成的图片，我有版权，请帮我根据提示词生成视频。",
             f"生成视频，{int(duration)}s",
             f"{image_prompt}。{motion}。",
         ]

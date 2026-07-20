@@ -91,6 +91,7 @@ def build_video_prompt(shot: dict, duration_sec: float = 5.0) -> str:
     motion = CAMERA_MOTION.get(camera, "镜头稳定，画面自然呈现")
 
     parts = [
+        "这是我用AI生成的图片，我有版权，请帮我根据提示词生成视频。",
         f"生成视频，{int(shot_dur)}s",
         f"{image_prompt}。{motion}。",
     ]
