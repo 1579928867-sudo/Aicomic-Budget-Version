@@ -44,10 +44,10 @@ def resolve_reference_images(db: Database, shot: dict) -> list[str]:
             (char_id,),
         ).fetchone()
         if row:
-            face = row.get("face_closeup_image", "")
+            face = row["face_closeup_image"] or ""
             if face and Path(face).exists():
                 images.append(face)
-            tv = row.get("three_view_image", "")
+            tv = row["three_view_image"] or ""
             if tv and Path(tv).exists():
                 images.append(tv)
 

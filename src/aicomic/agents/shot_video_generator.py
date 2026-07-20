@@ -77,11 +77,11 @@ class ShotVideoGeneratorAgent(AgentInterface):
             ).fetchone()
             if row:
                 # Face closeup first (anchor facial identity)
-                face_path = row.get("face_closeup_image", "")
+                face_path = row["face_closeup_image"] or ""
                 if face_path and Path(face_path).exists():
                     images.append(face_path)
                 # Then three-view
-                tv_path = row.get("three_view_image", "")
+                tv_path = row["three_view_image"] or ""
                 if tv_path and Path(tv_path).exists():
                     images.append(tv_path)
 
