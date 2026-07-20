@@ -163,6 +163,9 @@ class Database:
             "ALTER TABLE appearance_variant ADD COLUMN three_view_image TEXT DEFAULT ''",
             "ALTER TABLE scene_card ADD COLUMN multi_view_prompt TEXT DEFAULT ''",
             "ALTER TABLE scene_card ADD COLUMN multi_view_image TEXT DEFAULT ''",
+            # v0.8: face closeup for face-consistent three-view generation
+            "ALTER TABLE appearance_variant ADD COLUMN face_closeup_prompt TEXT DEFAULT ''",
+            "ALTER TABLE appearance_variant ADD COLUMN face_closeup_image TEXT DEFAULT ''",
         ]
         for sql in migrations:
             try:
@@ -433,6 +436,16 @@ class Database:
         """Update three_view_image column on an appearance_variant."""
         self.conn.execute(
             "UPDATE appearance_variant SET three_view_image = ? WHERE id = ?",
+            (file_path, variant_id),
+        )
+        self.conn.commit()
+
+    def update_appearance_variant_face_closeup(
+        self, variant_id: int, file_path: str
+    ):
+        """Update face_closeup_image column on an appearance_variant."""
+        self.conn.execute(
+            "UPDATE appearance_variant SET face_closeup_image = ? WHERE id = ?",
             (file_path, variant_id),
         )
         self.conn.commit()

@@ -49,19 +49,28 @@ class ImageGeneratorAgent(AgentInterface):
         prompt_field: str,
         update_fn: Any,
         entity_type: str,
+        reference_images: list[str] | None = None,
     ) -> bool:
         """Generate composite image for one entity. Returns True if an image was saved.
 
-        Flow: send composite prompt → Doubao returns up to 4 candidates →
-        CLI user selects best one → save path to DB → delete unchosen files.
+        Flow: optionally paste reference images → send composite prompt →
+        Doubao returns up to 4 candidates → CLI user selects → save → cleanup.
+
+        For character three-view variants: if entity has face_closeup_prompt
+        and no face_closeup_image yet, caller should generate face closeup
+        first and pass it as reference_images.
         """
         prompt = entity.get(prompt_field, "")
         if not prompt:
             return False
 
-        print(f"    [{entity_type} #{entity['id']}] 生成中...")
+        ref_label = f" (+{len(reference_images)}参考图)" if reference_images else ""
+        print(f"    [{entity_type} #{entity['id']}]{ref_label} 生成中...")
         try:
-            result = self.browser.generate_image(prompt=prompt, aspect_ratio="16:9")
+            result = self.browser.generate_image(
+                prompt=prompt, aspect_ratio="16:9",
+                reference_images=reference_images,
+            )
             if not result.success or not result.file_paths:
                 db.log(
                     self.agent_name, chapter_id,
@@ -166,7 +175,7 @@ class ImageGeneratorAgent(AgentInterface):
         try:
             # ── Load variant rows with pending three-view images ──
             variant_rows = db.conn.execute(
-                """SELECT id, three_view_prompt
+                """SELECT id, three_view_prompt, face_closeup_prompt, face_closeup_image
                    FROM appearance_variant
                    WHERE three_view_prompt != '' AND three_view_image = ''
                    ORDER BY id"""
@@ -188,14 +197,63 @@ class ImageGeneratorAgent(AgentInterface):
                 f"({total_entities} 实体: {len(variants)} 角色三视图, {len(scenes)} 场景多景别)..."
             )
 
-            # ── Generate character three-view images ──
+            # ── Generate face closeup images first (for face-consistent three-view) ──
+            face_closeups: dict[int, str] = {}  # variant_id → face_closeup_image_path
+            for vi, variant in enumerate(variants):
+                vid = variant["id"]
+                face_cp_prompt = variant.get("face_closeup_prompt", "")
+                face_cp_image = variant.get("face_closeup_image", "")
+                if not face_cp_prompt:
+                    continue
+                if face_cp_image and Path(face_cp_image).exists():
+                    face_closeups[vid] = face_cp_image
+                    print(f"    [脸部特写 #{vid}] 已存在，跳过生成")
+                    continue
+                # Generate face closeup
+                print(f"    [脸部特写 #{vid}] 生成中...")
+                try:
+                    result = self.browser.generate_image(
+                        prompt=face_cp_prompt, aspect_ratio="16:9",
+                    )
+                    if result.success and result.file_paths:
+                        chosen = result.file_paths[0]
+                        if len(result.file_paths) > 1:
+                            chosen = self._user_select_image(
+                                result.file_paths, "脸部特写", vid,
+                            )
+                        if chosen:
+                            db.update_appearance_variant_face_closeup(vid, chosen)
+                            face_closeups[vid] = chosen
+                            # Delete unchosen
+                            for p in result.file_paths:
+                                if p != chosen:
+                                    try:
+                                        Path(p).unlink(missing_ok=True)
+                                    except Exception:
+                                        pass
+                            print(f"    [脸部特写 #{vid}] ✓ 已保存")
+                    else:
+                        print(f"    [脸部特写 #{vid}] ✗ 生成失败: {result.error}")
+                except Exception as e:
+                    db.log(
+                        self.agent_name, chapter_id,
+                        "face_closeup_error",
+                        {"variant_id": vid, "error": str(e)},
+                        level="WARNING",
+                    )
+                    print(f"    [脸部特写 #{vid}] ✗ 异常: {e}")
+
+            # ── Generate character three-view images (with face closeup reference) ──
             variants_processed = 0
             for vi, variant in enumerate(variants):
                 label = f"角色三视图 {vi+1}/{len(variants)}"
                 print(f"    [{label}]")
+                vid = variant["id"]
+                refs = [face_closeups[vid]] if vid in face_closeups else None
                 if self._process_entity(
                     db, chapter_id, variant, "three_view_prompt",
                     db.update_appearance_variant_three_view, "角色变体",
+                    reference_images=refs,
                 ):
                     variants_processed += 1
 

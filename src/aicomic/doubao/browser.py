@@ -239,18 +239,21 @@ class DoubaoBrowserClient:
         }""")
 
     def generate_image(
-        self, prompt: str, aspect_ratio: str = "16:9"
+        self, prompt: str, aspect_ratio: str = "16:9",
+        reference_images: list[str] | None = None,
     ) -> ImageResult:
         """Generate an image via Doubao web UI.
 
-        Calibrated flow (2026-07-19):
+        Calibrated flow (2026-07-21):
           1. Navigate to create-image page
           2. Check for login redirect
           3. Optionally select aspect ratio
-          4. Type prompt into contenteditable, click send button
-          5. Poll for finished image grid (data-finished="true")
-          6. Extract grid image URLs, download via HTTP (requests)
-          7. Return all downloaded paths as ImageResult (file_path + file_paths)
+          4. If reference_images provided, paste them first (for face-consistent
+             three-view or other reference-based generation)
+          5. Type prompt into contenteditable, click send button
+          6. Poll for finished image grid (data-finished="true")
+          7. Extract grid image URLs, download via HTTP (requests)
+          8. Return all downloaded paths as ImageResult (file_path + file_paths)
         """
         self._wait_rate_limit()
         img_dir = self.output_dir / "images"
@@ -261,11 +264,20 @@ class DoubaoBrowserClient:
             self.ensure_browser()
             page = self._context.new_page()
 
+            # Grant clipboard permissions for reference image paste
+            if reference_images:
+                try:
+                    self._context.grant_permissions(
+                        ["clipboard-read", "clipboard-write"]
+                    )
+                except Exception:
+                    pass
+
             try:
                 # ── 1. Navigate ──
                 page.set_default_timeout(self.timeout_sec * 1000)
                 page.goto(self.page_urls["image"], wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(2000)  # Let sidebar/history fully render
+                page.wait_for_timeout(2000)
 
                 # ── 2. Check login ──
                 if "login" in page.url.lower() or "passport" in page.url.lower():
@@ -278,7 +290,7 @@ class DoubaoBrowserClient:
                 if aspect_ratio and aspect_ratio != "16:9":
                     self._select_aspect_ratio(page, sel, aspect_ratio)
 
-                # ── 5. Type prompt once, submit, poll; re-press Enter if needed ──
+                # ── 4. Find prompt input ──
                 prompt_selector = sel.get("prompt_input", 'div[contenteditable="true"]')
                 try:
                     page.wait_for_selector(prompt_selector, timeout=10000)
@@ -289,13 +301,23 @@ class DoubaoBrowserClient:
                 debug_dir = self.output_dir / "debug"
                 debug_dir.mkdir(parents=True, exist_ok=True)
 
-                # 5a. Click + type prompt (once, don't clear on retry — just re-press Enter)
+                # ── 4b. Paste reference images (optional, for face-consistent three-view) ──
+                refs = reference_images or []
+                valid_refs = [p for p in refs if Path(p).exists()]
+                if valid_refs:
+                    self._paste_images_to_input(page, prompt_selector, valid_refs)
+
+                # ── 5. Type prompt, submit, poll ──
+                # When reference_images were pasted, DO NOT clear — images are
+                # already in the input as attachments. Just click and type.
+                # Without reference images: clear the placeholder first.
                 page.click(prompt_selector)
-                time.sleep(0.5)
-                page.keyboard.press("Control+a")
                 time.sleep(0.3)
-                page.keyboard.press("Backspace")
-                time.sleep(0.2)
+                if not valid_refs:
+                    page.keyboard.press("Control+a")
+                    time.sleep(0.3)
+                    page.keyboard.press("Backspace")
+                    time.sleep(0.2)
                 page.keyboard.insert_text(prompt)
                 time.sleep(1.5)  # Wait for send button to render
 
@@ -588,23 +610,20 @@ class DoubaoBrowserClient:
                     prompt_selector = 'div[contenteditable="true"]'
                     page.wait_for_selector(prompt_selector, timeout=10000)
 
-                # ── 4. Paste reference images via CDP clipboard ──
+                # ── 4. Paste reference images into input (accumulate, no Enter) ──
                 valid_images = [p for p in reference_images if Path(p).exists()]
                 if valid_images:
-                    for img_path in valid_images:
-                        self._paste_image_to_input(page, prompt_selector, img_path)
-                        time.sleep(0.8)  # Let Doubao UI process each paste
+                    self._paste_images_to_input(page, prompt_selector, valid_images)
                 else:
                     print(f"    [Doubao] ⚠ 无有效参考图片，继续纯文本生成")
 
-                # ── 5. Type video prompt ──
+                # ── 5. Type video prompt AFTER images, clear nothing ──
                 page.click(prompt_selector)
                 time.sleep(0.3)
-                # Append prompt after pasted images; don't clear — images are already sent
                 page.keyboard.insert_text(prompt)
                 time.sleep(1.5)
 
-                # ── 6. Click send ──
+                # ── 6. Click send ONCE ──
                 send_clicked = self._click_send_button(page)
                 if not send_clicked:
                     time.sleep(2)
@@ -682,48 +701,88 @@ class DoubaoBrowserClient:
                 error=f"Doubao video-from-images generation failed: {e}",
             )
 
-    def _paste_image_to_input(self, page, prompt_selector: str, image_path: str):
-        """Paste a local image file into the Doubao input via CDP clipboard.
+    def _paste_images_to_input(
+        self, page, prompt_selector: str, image_paths: list[str]
+    ):
+        """Paste multiple images into Doubao contenteditable input as attachments.
 
-        Reads the image, writes it to the system clipboard as image/png
-        via a page JS call, then sends Ctrl+V into the contenteditable input.
+        Images accumulate in the input without sending — caller must type the
+        prompt text and click send afterwards. Uses clipboard API (needs user
+        gesture from click) with DataTransfer dispatch fallback.
+
+        CRITICAL: Does NOT press Enter — images must stay in the input until
+        prompt text is typed and send is clicked once.
         """
         import base64
-        from pathlib import Path
 
-        img_path = Path(image_path)
-        if not img_path.exists():
-            print(f"    [Doubao] ⚠ 图片不存在: {image_path}")
+        valid = [p for p in image_paths if Path(p).exists()]
+        if not valid:
+            print(f"    [Doubao] ⚠ 无有效参考图片")
             return
 
-        # Read and encode image
-        with open(img_path, "rb") as f:
-            img_bytes = f.read()
-        b64 = base64.b64encode(img_bytes).decode("ascii")
-        size_kb = len(img_bytes) // 1024
-        print(f"    [Doubao] 粘贴参考图: {img_path.name} ({size_kb}KB)")
+        print(f"    [Doubao] 准备粘贴 {len(valid)} 张参考图...")
 
-        # Write to clipboard via page JS
-        page.evaluate("""(b64) => {
-            const byteChars = atob(b64);
-            const byteArr = new Uint8Array(byteChars.length);
-            for (let i = 0; i < byteChars.length; i++) {
-                byteArr[i] = byteChars.charCodeAt(i);
-            }
-            const blob = new Blob([byteArr], {type: 'image/png'});
-            const item = new ClipboardItem({'image/png': blob});
-            return navigator.clipboard.write([item]);
-        }""", b64)
-        time.sleep(0.5)
+        for i, img_path in enumerate(valid):
+            img_p = Path(img_path)
+            with open(img_p, "rb") as f:
+                img_bytes = f.read()
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            size_kb = len(img_bytes) // 1024
+            print(f"    [Doubao] [{i+1}/{len(valid)}] {img_p.name} ({size_kb}KB)")
 
-        # Click input and paste
-        page.click(prompt_selector)
-        time.sleep(0.3)
-        page.keyboard.press("Control+v")
-        time.sleep(1.0)
-        # Press Enter to confirm the image attachment
-        page.keyboard.press("Enter")
-        time.sleep(0.5)
+            # Click input first — triggers user activation for clipboard API
+            page.click(prompt_selector)
+            time.sleep(0.2)
+
+            pasted = False
+            # ── Method 1: clipboard API (requires user gesture from click above) ──
+            try:
+                page.evaluate("""async (b64) => {
+                    const byteChars = atob(b64);
+                    const byteArr = new Uint8Array(byteChars.length);
+                    for (let i = 0; i < byteChars.length; i++)
+                        byteArr[i] = byteChars.charCodeAt(i);
+                    const blob = new Blob([byteArr], {type: 'image/png'});
+                    await navigator.clipboard.write([
+                        new ClipboardItem({'image/png': blob})
+                    ]);
+                }""", b64)
+                time.sleep(0.4)
+                page.keyboard.press("Control+v")
+                time.sleep(1.0)
+                pasted = True
+            except Exception as e:
+                print(f"    [Doubao] ⚠ 剪贴板API失败: {e}, 尝试DataTransfer...")
+
+            # ── Method 2: DataTransfer dispatch (fallback, no clipboard needed) ──
+            if not pasted:
+                try:
+                    page.evaluate("""(b64) => {
+                        const byteChars = atob(b64);
+                        const byteArr = new Uint8Array(byteChars.length);
+                        for (let i = 0; i < byteChars.length; i++)
+                            byteArr[i] = byteChars.charCodeAt(i);
+                        const blob = new Blob([byteArr], {type: 'image/png'});
+                        const file = new File([blob], 'ref.png', {type: 'image/png'});
+                        const dt = new DataTransfer();
+                        dt.items.add(file);
+                        const input = document.querySelector(
+                            'div[contenteditable="true"]');
+                        if (!input) return;
+                        input.focus();
+                        input.dispatchEvent(new ClipboardEvent('paste', {
+                            bubbles: true, cancelable: true, clipboardData: dt
+                        }));
+                    }""", b64)
+                    time.sleep(1.0)
+                    pasted = True
+                    print(f"    [Doubao] ✓ DataTransfer paste dispatched")
+                except Exception as e2:
+                    print(f"    [Doubao] ✗ DataTransfer 也失败: {e2}")
+
+            if pasted:
+                # Small delay between images to let Doubao process each attachment
+                time.sleep(0.5)
 
     def _find_video_urls(self, page) -> list[str]:
         """Find <video> elements on the page and return their src URLs."""
