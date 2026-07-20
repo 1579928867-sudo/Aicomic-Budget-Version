@@ -54,13 +54,14 @@ class ShotVideoGeneratorAgent(AgentInterface):
     def _resolve_reference_images(
         self, db: Database, shot: dict
     ) -> list[str]:
-        """Find reference images for a shot: character three-view + scene multi-view.
+        """Find reference images for a shot: face closeup + three-view + scene multi-view.
 
-        Returns list of existing file paths.
+        Order matters: face closeup first (anchor facial features), then three-view
+        (full body reference), then scene multi-view (environment).
         """
         images: list[str] = []
 
-        # ── Character three-view images ──
+        # ── Character face closeup + three-view images ──
         char_ids_raw = shot.get("char_ids", "[]")
         try:
             char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
@@ -68,17 +69,21 @@ class ShotVideoGeneratorAgent(AgentInterface):
             char_ids = []
 
         for char_id in char_ids:
-            # Find the default variant with a three_view_image
             row = db.conn.execute(
-                """SELECT three_view_image FROM appearance_variant
+                """SELECT three_view_image, face_closeup_image FROM appearance_variant
                    WHERE character_id = ? AND three_view_image != ''
                    ORDER BY type = 'default' DESC, id ASC LIMIT 1""",
                 (char_id,),
             ).fetchone()
-            if row and row["three_view_image"]:
-                path = row["three_view_image"]
-                if Path(path).exists():
-                    images.append(path)
+            if row:
+                # Face closeup first (anchor facial identity)
+                face_path = row.get("face_closeup_image", "")
+                if face_path and Path(face_path).exists():
+                    images.append(face_path)
+                # Then three-view
+                tv_path = row.get("three_view_image", "")
+                if tv_path and Path(tv_path).exists():
+                    images.append(tv_path)
 
         # ── Scene multi-view image ──
         scene_id = shot.get("scene_id")
@@ -135,9 +140,9 @@ class ShotVideoGeneratorAgent(AgentInterface):
 
         parts.append(
             "高质量AI视频，流畅运镜，电影级画面。"
-            "场景空间布局参考附图中的场景多景别设定：上方全景为完整空间环境，"
-            "中间中景为核心活动区域，下方特写为材质与道具细节，白线分隔各区域。"
-            "角色形象参考附图中的三视图设定（左侧面-中正面-右背面）。"
+            "参考图说明：第1张为角色面部特写（锚定五官和面部轮廓）；"
+            "第2张为角色三视图（左侧面-中正面-右背面，展示全身服装和体型）；"
+            "第3张为场景多景别设定（白线分隔：上方全景空间环境、中间中景核心区域、下方特写材质道具）。"
         )
 
         return "".join(parts)
