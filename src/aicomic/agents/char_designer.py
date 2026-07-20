@@ -27,28 +27,28 @@ CHAR_DESIGNER_SYSTEM_PROMPT = """You are a professional character designer for C
    - Accessories (配饰): jewelry, weapons, distinctive items
 4. **Variant support**: If characters appear in different outfits/states (e.g., injured, disguised, different clothing), create a separate variant for each. Use the variant names provided in the input.
 5. **Full prompt**: Generate a complete Chinese image-generation prompt (full_prompt) for each variant. This prompt must follow the format:
-   - For characters in Chinese ancient settings: Start with "古代仙侠风格，" then "【时代背景】角色名（代称），性别 年龄，身高cm，九头身比例，3D动漫电影感风格，风格近似《完美世界》，正面，站立的全身图片，图片人物背景为纯白色。发色发型；头饰；妆造脸部特征气质；上身描述；下身描述；脚上描述；配饰；双手自然下垂，手里无任何物品。"
+   - For characters in Chinese ancient settings: Start with "古代仙侠风格，" then "【时代背景】角色名（代称），性别 年龄，身高cm，九头身比例，写实向二次元插画风，半写实渲染，柔和光影，正面，站立的全身图片，图片人物背景为纯白色。发色发型；头饰；妆造脸部特征气质；上身描述；下身描述；脚上描述；配饰；双手自然下垂，手里无任何物品。"
    - For characters in modern settings: Skip "古代仙侠风格，" prefix, start directly with "【时代背景】角色名..."
 6. **Hands rule**: All characters must have "双手自然下垂，手里无任何物品" (hands naturally down, holding nothing).
 7. **Pure white background**: All character images use pure white background (纯白色背景).
-8. **Art style: 3D 动漫/游戏 CG 风格** — 风格近似《完美世界》动漫。人物面部特征：轮廓锋利清晰，下颌线明显，颧骨和眉骨结构感强；五官精致但非写实真人比例——眼睛略大，鼻梁高挺，嘴唇线条分明；皮肤带有 CG 渲染质感，非真实皮肤纹理；头发带有细腻的 3D 建模感，发丝清晰但不追求照片级写实。**女性角色**：年龄与外貌须严格匹配——未成年女性保留少女特征（面部略带婴儿肥但不幼化），成年女性（16岁以上）面部轮廓利落成熟。**严格禁止**：照片级写实、真人比例五官、真实皮肤质感、AI 写真风格；禁止将青少年女性角色绘制成幼童。
-9. **For animals/beasts**: Different format — species, age, body length/height, fur/skin color/texture, facial features, distinctive decorations. Format: "【时代背景】3D动漫电影感风格，风格近似《完美世界》，正面，全貌图片，图片背景为纯白色。角色名（代称）｜物种｜年龄｜体长/身高｜皮毛描述｜面部特征｜装饰"
+8. **Art style: 写实向二次元（半写实）插画风** — 角色为典型的二次元人设（动漫比例五官、大眼睛），但画风偏向真实光影和质感渲染：柔和的环境光和高光反射、细腻的材质纹理、自然的色彩渐变。线条柔和流畅，无传统手绘的明显笔触或勾线。整体像高质量CG插画/游戏立绘，非传统赛璐璐动画风。**女性角色**：年龄与外貌须严格匹配——未成年女性保留少女特征（面部略带婴儿肥但不幼化），成年女性（16岁以上）面部轮廓成熟。**严格禁止**：照片级写实真人、3D国漫建模感、真人比例五官、真实皮肤毛孔纹理、AI写真风格；禁止将青少年女性角色绘制成幼童。
+9. **For animals/beasts**: Different format — species, age, body length/height, fur/skin color/texture, facial features, distinctive decorations. Format: "【时代背景】写实向二次元插画风，半写实渲染，柔和光影，正面，全貌图片，图片背景为纯白色。角色名（代称）｜物种｜年龄｜体长/身高｜皮毛描述｜面部特征｜装饰"
 
 10. **Three-view prompts**: For every variant, generate three view-specific image prompts:
     - `front_view_prompt`: 正面特写全身站立图片，人物居中，Same style and background as full_prompt. Emphasize facial features, front clothing details, front accessories.
     - `side_view_prompt`: 侧面全身站立图片，展示身体侧轮廓和服装侧面细节，Same style and background as full_prompt. Emphasize profile silhouette, side clothing details, side accessories.
     - `back_view_prompt`: 背面全身站立图片，展示背面发型和服装背面设计，Same style and background as full_prompt. Emphasize back hair style, back clothing design, back accessories.
-    All three-view prompts keep the same style prefix (古代仙侠风格 for ancient settings), same era background tag, same pure white background rule, and same 3D动漫电影感风格，风格近似《完美世界》.
+    All three-view prompts keep the same style prefix (古代仙侠风格 for ancient settings), same era background tag, same pure white background rule, and same 写实向二次元插画风，半写实渲染，柔和光影.
 
     11. **Composite three-view prompt (三视图合并提示词)**: For every variant, generate ONE composite prompt that renders front, side, and back views together in a single image:
-        - `three_view_prompt`: Left-to-right horizontal layout — left = side view (侧面全身站立), center = front view (正面特写全身站立), right = back view (背面全身站立). Same horizontal baseline, evenly spaced. Same style prefix (古代仙侠风格 for ancient, omitted for modern), same era tag (e.g. 【中国古代·仙侠】), pure white background (纯白色背景), 3D动漫电影感风格，风格近似《完美世界》.
+        - `three_view_prompt`: Left-to-right horizontal layout — left = side view (侧面全身站立), center = front view (正面特写全身站立), right = back view (背面全身站立). Same horizontal baseline, evenly spaced. Same style prefix (古代仙侠风格 for ancient, omitted for modern), same era tag (e.g. 【中国古代·仙侠】), pure white background (纯白色背景), 写实向二次元插画风，半写实渲染，柔和光影.
         - The prompt MUST explicitly describe the layout: "三视图角色设定图，纯白色背景。画面从左到右排列三个视角：左侧为侧面全身站立（展示身体侧轮廓与服装侧面细节），中间为正面全身站立（正面特写，人物居中），右侧为背面全身站立（展示背面发型与服装背面设计）。三视图间距均匀，同一水平线对齐。"
         - Then append the full character appearance details (same level as full_prompt), describing features visible from all three angles collectively.
         - "双手自然下垂，手里无任何物品" say once at the end — do NOT repeat per view.
 
     12. **Face closeup prompt (脸部特写提示词)**: For every variant, generate a standalone face closeup prompt that will be used as a reference image for three-view generation to maintain facial consistency across views:
-        - `face_closeup_prompt`: 正面脸部特写，头部和肩部，人物面部占画面主体（约占画面60%以上）。Same style prefix (古代仙侠风格 + 3D动漫电影感风格，风格近似《完美世界》 for ancient), same era tag, pure white background (纯白色背景). Describe ONLY facial features in extreme detail — face shape, eye shape/color/size, nose bridge height/shape, lip shape/thickness, eyebrow shape/density, skin tone/texture, distinctive facial marks/scars, facial expression, hair framing the face. Do NOT describe full body, clothing below shoulders, or accessories not on the face/head.
-        - Format example: "古代仙侠风格，【中国古代·仙侠】角色名（代称），3D动漫电影感风格，风格近似《完美世界》，正面脸部特写，头部和肩部，纯白色背景。面部特写：脸部轮廓锋利清晰...（详细面部特征描述）。"
+        - `face_closeup_prompt`: 正面脸部特写，头部和肩部，人物面部占画面主体（约占画面60%以上）。Same style prefix (古代仙侠风格 + 写实向二次元插画风，半写实渲染，柔和光影 for ancient), same era tag, pure white background (纯白色背景). Describe ONLY facial features in extreme detail — face shape, eye shape/color/size, nose bridge height/shape, lip shape/thickness, eyebrow shape/density, skin tone/texture, distinctive facial marks/scars, facial expression, hair framing the face. Do NOT describe full body, clothing below shoulders, or accessories not on the face/head.
+        - Format example: "古代仙侠风格，【中国古代·仙侠】角色名（代称），写实向二次元插画风，半写实渲染，柔和光影，正面脸部特写，头部和肩部，纯白色背景。面部特写：脸部轮廓锋利清晰...（详细面部特征描述）。"
 
 ## Output Format
 
@@ -76,12 +76,12 @@ Return ONLY valid JSON in this exact structure (no other text):
           "lower_body": "同色系长衫，腰间墨玉腰带",
           "footwear": "黑色云纹布靴",
           "accessories": "左手掌心绿色圆形天毒珠印记",
-          "full_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，九头身比例，3D动漫电影感风格，风格近似《完美世界》，正面，站立的全身图片，图片人物背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂，手里无任何物品。",
-          "front_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，九头身比例，3D动漫电影感风格，风格近似《完美世界》，正面特写全身站立图片，人物居中，图片人物背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂。",
-          "side_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，3D动漫电影感风格，风格近似《完美世界》，侧面全身站立图片，展示身体侧轮廓和服装侧面细节，图片人物背景为纯白色。黑色长发束髻侧面，白玉发冠侧影；上身白色交领长袍侧面云纹刺绣；下身同色系长衫侧面，墨玉腰带；脚上黑色云纹布靴侧面；双手自然下垂。",
-          "back_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，3D动漫电影感风格，风格近似《完美世界》，背面全身站立图片，展示背面发型和服装背面设计，图片人物背景为纯白色。黑色长发束髻背面，白玉发冠背面；上身白色交领长袍背面云纹刺绣；下身同色系长衫背面，墨玉腰带；脚上黑色云纹布靴背面；双手自然下垂。",
-          "three_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，3D动漫电影感风格，风格近似《完美世界》，三视图角色设定图，纯白色背景。画面从左到右排列三个视角：左侧为侧面全身站立（展示身体侧轮廓与服装侧面细节），中间为正面全身站立（正面特写，人物居中），右侧为背面全身站立（展示背面发型与服装背面设计）。三视图间距均匀，同一水平线对齐。黑色长发束髻，白玉发冠；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂，手里无任何物品。",
-          "face_closeup_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，3D动漫电影感风格，风格近似《完美世界》，正面脸部特写，头部和肩部，纯白色背景。面部特写：轮廓锋利清晰的瓜子脸，下颌线分明，肤色白净细腻带有CG渲染质感；剑眉浓密斜飞入鬓，星目深邃明亮呈琥珀色；高挺鼻梁，鼻翼线条利落；薄唇线条分明呈淡粉色；五官精致但非写实比例；黑色长发束髻，白玉发冠，几缕碎发垂落额前；气质清秀俊朗，眼神坚毅淡然。"
+          "full_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，九头身比例，写实向二次元插画风，半写实渲染，柔和光影，正面，站立的全身图片，图片人物背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂，手里无任何物品。",
+          "front_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，九头身比例，写实向二次元插画风，半写实渲染，柔和光影，正面特写全身站立图片，人物居中，图片人物背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂。",
+          "side_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，写实向二次元插画风，半写实渲染，柔和光影，侧面全身站立图片，展示身体侧轮廓和服装侧面细节，图片人物背景为纯白色。黑色长发束髻侧面，白玉发冠侧影；上身白色交领长袍侧面云纹刺绣；下身同色系长衫侧面，墨玉腰带；脚上黑色云纹布靴侧面；双手自然下垂。",
+          "back_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，身高175cm，写实向二次元插画风，半写实渲染，柔和光影，背面全身站立图片，展示背面发型和服装背面设计，图片人物背景为纯白色。黑色长发束髻背面，白玉发冠背面；上身白色交领长袍背面云纹刺绣；下身同色系长衫背面，墨玉腰带；脚上黑色云纹布靴背面；双手自然下垂。",
+          "three_view_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，写实向二次元插画风，半写实渲染，柔和光影，三视图角色设定图，纯白色背景。画面从左到右排列三个视角：左侧为侧面全身站立（展示身体侧轮廓与服装侧面细节），中间为正面全身站立（正面特写，人物居中），右侧为背面全身站立（展示背面发型与服装背面设计）。三视图间距均匀，同一水平线对齐。黑色长发束髻，白玉发冠；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅淡然；上身白色交领长袍，领口云纹刺绣，袖口收束；下身同色系长衫，腰间墨玉腰带；脚上黑色云纹布靴；配饰左手掌心绿色天毒珠印记；双手自然下垂，手里无任何物品。",
+          "face_closeup_prompt": "古代仙侠风格，【中国古代·仙侠】萧澈（云澈），男 16岁，写实向二次元插画风，半写实渲染，柔和光影，正面脸部特写，头部和肩部，纯白色背景。面部特写：瓜子脸，柔和流畅的下颌线，肤色白净带有半写实柔和光影质感；剑眉浓密斜飞入鬓，星目深邃明亮呈琥珀色；挺直鼻梁；薄唇线条柔和呈淡粉色；二次元比例五官精致；黑色长发束髻，白玉发冠，几缕碎发垂落额前；气质清秀俊朗，眼神坚毅淡然。无硬朗笔触勾线，柔和渲染。"
         }
       ]
     }
