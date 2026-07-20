@@ -26,9 +26,31 @@ from aicomic.doubao.browser import DoubaoBrowserClient
 from aicomic.doubao import CookieExpiredError
 
 
-def resolve_reference_images(db: Database, shot: dict) -> list[str]:
-    """Find reference images: face closeup → three-view → scene multi-view."""
+def resolve_reference_images(db: Database, shot: dict, script_id: int) -> list[str]:
+    """Find reference images: face closeup → three-view → scene multi-view.
+    Uses script JSON to match the correct variant for each character in this shot."""
     images: list[str] = []
+
+    # ── Build char_id → variant_name map from script JSON (this shot only) ──
+    char_variant: dict[int, str] = {}
+    script_rows = db.conn.execute(
+        "SELECT raw_json FROM script WHERE id = ?", (script_id,)
+    ).fetchone()
+    shot_num = shot["shot_num"]
+    if script_rows:
+        script_json = json.loads(script_rows["raw_json"])
+        for scene in script_json.get("scenes", []):
+            for shot_data in scene.get("shots", []):
+                if shot_data.get("shot_num") == shot_num:
+                    for char in shot_data.get("characters", []):
+                        cname = char.get("name", "")
+                        crow = db.conn.execute(
+                            "SELECT id FROM character_card WHERE name = ?",
+                            (cname,),
+                        ).fetchone()
+                        if crow:
+                            char_variant[crow["id"]] = char.get("variant", "default")
+                    break
 
     char_ids_raw = shot.get("char_ids", "[]")
     try:
@@ -37,12 +59,20 @@ def resolve_reference_images(db: Database, shot: dict) -> list[str]:
         char_ids = []
 
     for char_id in char_ids:
+        variant_name = char_variant.get(char_id, "default")
         row = db.conn.execute(
             """SELECT three_view_image, face_closeup_image FROM appearance_variant
-               WHERE character_id = ? AND three_view_image != ''
-               ORDER BY type = 'default' DESC, id ASC LIMIT 1""",
-            (char_id,),
+               WHERE character_id = ? AND variant_name = ? AND three_view_image != ''
+               LIMIT 1""",
+            (char_id, variant_name),
         ).fetchone()
+        if not row:
+            row = db.conn.execute(
+                """SELECT three_view_image, face_closeup_image FROM appearance_variant
+                   WHERE character_id = ? AND three_view_image != ''
+                   ORDER BY type = 'default' DESC LIMIT 1""",
+                (char_id,),
+            ).fetchone()
         if row:
             face = row["face_closeup_image"] or ""
             if face and Path(face).exists():
@@ -225,7 +255,7 @@ def main():
             print(f"  [{label}]")
 
             # ── Resolve reference images ──
-            refs = resolve_reference_images(db, shot)
+            refs = resolve_reference_images(db, shot, script_id)
             if not refs:
                 print(f"  ⚠ 无参考图片，跳过")
                 continue

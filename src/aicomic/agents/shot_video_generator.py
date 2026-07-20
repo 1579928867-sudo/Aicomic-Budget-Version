@@ -52,16 +52,37 @@ class ShotVideoGeneratorAgent(AgentInterface):
     # ── Reference image resolution ──
 
     def _resolve_reference_images(
-        self, db: Database, shot: dict
+        self, db: Database, shot: dict, script_id: int
     ) -> list[str]:
         """Find reference images for a shot: face closeup + three-view + scene multi-view.
 
-        Order matters: face closeup first (anchor facial features), then three-view
-        (full body reference), then scene multi-view (environment).
+        Uses script JSON to resolve which variant each character uses in this shot,
+        NOT just the default variant.
         """
         images: list[str] = []
 
-        # ── Character face closeup + three-view images ──
+        # ── Build char_id → variant_name map from script JSON ──
+        char_variant: dict[int, str] = {}
+        script_rows = db.conn.execute(
+            "SELECT raw_json FROM script WHERE id = ?", (script_id,)
+        ).fetchone()
+        shot_num = shot["shot_num"]
+        if script_rows:
+            script_json = json.loads(script_rows["raw_json"])
+            for scene in script_json.get("scenes", []):
+                for shot_data in scene.get("shots", []):
+                    if shot_data.get("shot_num") == shot_num:
+                        for char in shot_data.get("characters", []):
+                            cname = char.get("name", "")
+                            crow = db.conn.execute(
+                                "SELECT id FROM character_card WHERE name = ?",
+                                (cname,),
+                            ).fetchone()
+                            if crow:
+                                char_variant[crow["id"]] = char.get("variant", "default")
+                        break  # Only this shot's characters matter
+
+        # ── Character images (face closeup + three-view) ──
         char_ids_raw = shot.get("char_ids", "[]")
         try:
             char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
@@ -69,18 +90,26 @@ class ShotVideoGeneratorAgent(AgentInterface):
             char_ids = []
 
         for char_id in char_ids:
+            variant_name = char_variant.get(char_id, "default")
+            # Match the EXACT variant used in this shot
             row = db.conn.execute(
                 """SELECT three_view_image, face_closeup_image FROM appearance_variant
-                   WHERE character_id = ? AND three_view_image != ''
-                   ORDER BY type = 'default' DESC, id ASC LIMIT 1""",
-                (char_id,),
+                   WHERE character_id = ? AND variant_name = ? AND three_view_image != ''
+                   LIMIT 1""",
+                (char_id, variant_name),
             ).fetchone()
+            if not row:
+                # Fallback: any variant for this character
+                row = db.conn.execute(
+                    """SELECT three_view_image, face_closeup_image FROM appearance_variant
+                       WHERE character_id = ? AND three_view_image != ''
+                       ORDER BY type = 'default' DESC LIMIT 1""",
+                    (char_id,),
+                ).fetchone()
             if row:
-                # Face closeup first (anchor facial identity)
                 face_path = row["face_closeup_image"] or ""
                 if face_path and Path(face_path).exists():
                     images.append(face_path)
-                # Then three-view
                 tv_path = row["three_view_image"] or ""
                 if tv_path and Path(tv_path).exists():
                     images.append(tv_path)
@@ -256,8 +285,8 @@ class ShotVideoGeneratorAgent(AgentInterface):
                 label = f"镜头 {shot_num} ({si+1}/{len(shots_to_generate)})"
                 print(f"\n  [{label}]")
 
-                # Resolve reference images
-                ref_images = self._resolve_reference_images(db, shot)
+                # Resolve reference images (script_id for variant matching)
+                ref_images = self._resolve_reference_images(db, shot, script_id)
                 if not ref_images:
                     db.log(
                         self.agent_name, chapter_id, "shot_skipped_no_refs",
