@@ -264,15 +264,6 @@ class DoubaoBrowserClient:
             self.ensure_browser()
             page = self._context.new_page()
 
-            # Grant clipboard permissions for reference image paste
-            if reference_images:
-                try:
-                    self._context.grant_permissions(
-                        ["clipboard-read", "clipboard-write"]
-                    )
-                except Exception:
-                    pass
-
             try:
                 # ── 1. Navigate ──
                 page.set_default_timeout(self.timeout_sec * 1000)
@@ -284,6 +275,15 @@ class DoubaoBrowserClient:
                     raise CookieExpiredError(
                         "Doubao cookies expired. Please re-export cookies to data/doubao_cookies.json"
                     )
+
+                # Grant clipboard permission (must be after nav to doubao.com origin)
+                if reference_images:
+                    try:
+                        self._context.grant_permissions(
+                            ["clipboard-read", "clipboard-write"]
+                        )
+                    except Exception:
+                        pass
 
                 # ── 3. Aspect ratio (optional) ──
                 sel = self.selectors["image"]
@@ -583,12 +583,6 @@ class DoubaoBrowserClient:
             self.ensure_browser()
             page = self._context.new_page()
 
-            # Grant clipboard permissions for image paste
-            try:
-                self._context.grant_permissions(["clipboard-read", "clipboard-write"])
-            except Exception:
-                pass  # Permissions may already be granted
-
             try:
                 # ── 1. Navigate to image creation page ──
                 page.set_default_timeout(self.timeout_sec * 1000)
@@ -600,6 +594,14 @@ class DoubaoBrowserClient:
                     raise CookieExpiredError(
                         "Doubao cookies expired. Please re-export cookies."
                     )
+
+                # Grant clipboard permission (must be after nav to doubao.com origin)
+                try:
+                    self._context.grant_permissions(
+                        ["clipboard-read", "clipboard-write"]
+                    )
+                except Exception:
+                    pass
 
                 # ── 3. Find and prepare the prompt input ──
                 sel = self.selectors["image"]
