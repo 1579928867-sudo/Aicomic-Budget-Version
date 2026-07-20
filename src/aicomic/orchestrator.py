@@ -242,7 +242,7 @@ class Orchestrator:
                         level="WARNING",
                     )
 
-        # ── Step 5: Video Generator (optional) ──
+        # ── Step 5: Video Generator (optional, legacy — skipped when shot-video-generator ran) ──
         video_result = None
         if with_video and script_id:
             video_result = self.bus.run(
@@ -251,26 +251,38 @@ class Orchestrator:
                 self.db,
             )
             if not video_result.success:
-                self.db.log(
-                    "orchestrator", chapter_id, "pipeline_failed",
-                    {"failed_at": "video-generator", "error": video_result.error},
-                    level="ERROR",
-                )
+                err = video_result.error or ""
+                if "not registered" in err:
+                    # doubao mode: shot-video-generator replaces this step
+                    print(f"  ⏭ Video Generator: 由 ShotVideoGenerator 替代，跳过")
+                    video_result = None  # Don't block composer
+                else:
+                    self.db.log(
+                        "orchestrator", chapter_id, "pipeline_failed",
+                        {"failed_at": "video-generator", "error": video_result.error},
+                        level="ERROR",
+                    )
 
-        # ── Step 6: Video Composer (optional, only when video was generated) ──
+        # ── Step 6: Video Composer (optional, runs if any video clips exist) ──
         composer_result = None
-        if with_video and script_id and video_result and video_result.success:
-            composer_result = self.bus.run(
-                "video-composer",
-                {"chapter_id": chapter_id, "script_id": script_id},
-                self.db,
-            )
-            if not composer_result.success:
-                self.db.log(
-                    "orchestrator", chapter_id, "pipeline_failed",
-                    {"failed_at": "video-composer", "error": composer_result.error},
-                    level="ERROR",
+        if with_video and script_id:
+            # Check if we have video clips (either from shot-video-gen or legacy)
+            clips_exist = bool(shot_video_result and shot_video_result.success
+                               and shot_video_result.data
+                               and shot_video_result.data.get("clips_created", 0) > 0)
+            legacy_ok = video_result and video_result.success
+            if clips_exist or legacy_ok:
+                composer_result = self.bus.run(
+                    "video-composer",
+                    {"chapter_id": chapter_id, "script_id": script_id},
+                    self.db,
                 )
+                if not composer_result.success:
+                    self.db.log(
+                        "orchestrator", chapter_id, "pipeline_failed",
+                        {"failed_at": "video-composer", "error": composer_result.error},
+                        level="ERROR",
+                    )
 
         self.db.log(
             "orchestrator", chapter_id, "pipeline_completed",
@@ -281,7 +293,7 @@ class Orchestrator:
                 "image_generator": "ok" if (img_result and img_result.success) else ("skipped" if not with_images else "failed"),
                 "shot_visualizer": "ok" if shot_vis_result.success else "failed",
                 "shot_video_generator": "ok" if (shot_video_result and shot_video_result.success) else ("skipped" if not with_video else "failed"),
-                "video_generator": "ok" if (video_result and video_result.success) else ("skipped" if not with_video else "failed"),
+                "video_generator": "ok" if (video_result and video_result.success) else ("skipped" if (not with_video or video_result is None) else "failed"),
                 "video_composer": "ok" if (composer_result and composer_result.success) else ("skipped" if not with_video else "failed"),
             },
         )
