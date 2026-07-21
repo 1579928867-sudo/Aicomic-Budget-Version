@@ -16,7 +16,7 @@ class FakeBrowserClient:
         self.prompts: list[str] = []
         self.will_fail = False
 
-    def generate_image(self, prompt: str, aspect_ratio: str = "16:9") -> ImageResult:
+    def generate_image(self, prompt: str, aspect_ratio: str = "16:9", **kwargs) -> ImageResult:
         self.call_count += 1
         self.prompts.append(prompt)
         if self.will_fail:
@@ -43,24 +43,21 @@ def _make_db():
 
 
 def _setup_full_data(db: Database) -> tuple[int, int]:
-    """Create novel, chapter, script, char variants and scene cards with composite prompts."""
+    """Create novel, chapter, script, character outfit and scene cards with design prompts."""
     novel_id = db.create_novel("测试", "")
     chapter_id = db.create_chapter(novel_id, 1, "内容")
     script_id = db.save_script(chapter_id, {"scenes": [], "characters": [], "scenes_list": []})
 
-    # Create a character with variant + three_view_prompt (composite prompt)
+    # Create a character with an outfit (design_prompt)
     char_id, _ = db.get_or_create_character("叶凡")
-    variant_id = db.create_appearance_variant(
+    db.create_character_outfit(
         character_id=char_id,
-        variant_name="default",
-        variant_type="default",
-        appearance_json='{"full_prompt": "test"}',
+        tag="默认",
+        prompt="【中国古代·仙侠】叶凡，男 18岁，8k 类 3D 游戏 cg 电影风格，三视图组合prompt",
+        image_path="",
+        is_default=1,
+        activation_condition="",
     )
-    db.update_appearance_variant_three_view_prompt(
-        variant_id=variant_id,
-        prompt="正面侧面背面三视图组合prompt",
-    )
-    db.set_character_default_look(char_id, variant_id)
 
     # Create a scene with multi_view_prompt (composite prompt)
     scene_id = db.get_or_create_scene("山门")
@@ -109,19 +106,19 @@ def test_execute_success():
 
         assert result.success is True
         assert result.data is not None
-        # 1 variant x 1 composite prompt + 1 scene x 1 composite prompt = 2 images
+        # 1 outfit x 1 design_prompt + 1 scene x 1 composite prompt = 2 images
         assert result.data["images_generated"] == 2
-        assert result.data["variants_processed"] == 1
+        assert result.data["outfits_processed"] == 1
         assert result.data["scenes_processed"] == 1
         assert fake_browser.call_count == 2
 
-        # Verify DB: variant three_view_image populated (composite column)
-        variants = db.conn.execute(
-            "SELECT * FROM appearance_variant ORDER BY id"
+        # Verify DB: character_outfit image_path populated
+        outfits = db.conn.execute(
+            "SELECT * FROM character_outfit ORDER BY id"
         ).fetchall()
-        for v in variants:
-            vd = dict(v)
-            assert vd["three_view_image"] != "", "three_view_image should be populated"
+        for o in outfits:
+            od = dict(o)
+            assert od["image_path"] != "", "image_path should be populated"
 
         # Verify DB: scene multi_view_image populated (composite column)
         scenes = db.conn.execute(
@@ -182,8 +179,8 @@ def test_execute_all_browser_calls_fail():
 
         # Agent should report non-success since ALL images failed
         assert result.success is False
-        assert "No images" in result.error or "images generated" in str(result.data.get("images_generated", ""))
-        assert result.data["images_generated"] == 0
+        assert result.error is not None
+        assert "No images" in result.error
     finally:
         db.close()
         db_path.unlink()

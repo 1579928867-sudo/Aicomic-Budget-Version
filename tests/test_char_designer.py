@@ -1,6 +1,5 @@
 """Tests for Character Designer Agent."""
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -35,52 +34,16 @@ def _make_canned_response() -> dict:
                 "aliases": [],
                 "gender": "男",
                 "age": 18,
-                "height_cm": 178,
                 "is_human": True,
-                "variants": [
-                    {
-                        "variant_name": "default",
-                        "hair": "黑色长发束髻",
-                        "head_accessories": "白玉发冠",
-                        "makeup": "剑眉星目，清秀面容",
-                        "face": "清秀俊朗，肤色白净",
-                        "aura": "气质坚毅",
-                        "upper_body": "白色交领长袍，云纹刺绣",
-                        "lower_body": "同色系长衫，墨玉腰带",
-                        "footwear": "黑色云纹布靴",
-                        "accessories": "左手天毒珠印记",
-                        "full_prompt": "古代仙侠风格，【中国古代·仙侠】叶凡，男 18岁，身高178cm，九头身比例，写实电影感风格，正面，站立的全身图片，图片人物背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅；上身白色交领长袍，云纹刺绣；下身同色系长衫，墨玉腰带；脚上黑色云纹布靴；配饰左手天毒珠印记；双手自然下垂，手里无任何物品。",
-                        "front_view_prompt": "古代仙侠风格，【中国古代·仙侠】叶凡，男 18岁，身高178cm，九头身比例，写实电影感风格，正面特写全身站立图片，人物居中，图片背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅；上身白色交领长袍，云纹刺绣；下身同色系长衫，墨玉腰带；脚上黑色云纹布靴；配饰左手天毒珠印记；双手自然下垂。",
-                        "side_view_prompt": "古代仙侠风格，【中国古代·仙侠】叶凡，男 18岁，身高178cm，九头身比例，写实电影感风格，侧面全身站立图片，展示身体侧轮廓和服装侧面细节，图片背景为纯白色。黑色长发束髻侧面，白玉发冠侧影；上身白色交领长袍侧面云纹刺绣；下身同色系长衫侧面，墨玉腰带；脚上黑色云纹布靴侧面；双手自然下垂。",
-                        "back_view_prompt": "古代仙侠风格，【中国古代·仙侠】叶凡，男 18岁，身高178cm，九头身比例，写实电影感风格，背面全身站立图片，展示背面发型和服装背面设计，图片背景为纯白色。黑色长发束髻背面，白玉发冠背面；上身白色交领长袍背面云纹刺绣；下身同色系长衫背面，墨玉腰带；脚上黑色云纹布靴背面；双手自然下垂。",
-                    }
-                ],
+                "design_prompt": "【中国古代·仙侠】叶凡，男 18岁，8k 类 3D 游戏 cg 电影风格，包括左侧人物全身设计图含衣着细节，右侧画面三视图，同时左侧上方为人物名称，带一些人物简介。画面从左到右排列三个视角。黑色长发束髻，白玉发冠；剑眉星目清秀面容；白色交领长袍云纹刺绣；墨玉腰带；黑色云纹布靴；左手天毒珠印记；双手自然下垂。",
             },
             {
                 "name": "长老",
                 "aliases": [],
                 "gender": "男",
                 "age": 60,
-                "height_cm": 170,
                 "is_human": True,
-                "variants": [
-                    {
-                        "variant_name": "default",
-                        "hair": "白色长发束髻",
-                        "head_accessories": "木质道冠",
-                        "makeup": "白眉长须，仙风道骨",
-                        "face": "面容清瘦，皱纹深刻",
-                        "aura": "气质威严深邃",
-                        "upper_body": "灰色宽袖道袍，八卦纹样",
-                        "lower_body": "同色系长裤",
-                        "footwear": "黑色布鞋",
-                        "accessories": "手持拂尘",
-                        "full_prompt": "古代仙侠风格，【中国古代·仙侠】长老，男 60岁，身高170cm，九头身比例，写实电影感风格，正面，站立的全身图片，图片人物背景为纯白色。白色长发束髻，木质道冠束发；白眉长须，仙风道骨，面容清瘦，皱纹深刻，气质威严深邃；上身灰色宽袖道袍，八卦纹样；下身同色系长裤；脚上黑色布鞋；配饰手持拂尘；双手自然下垂，手里无任何物品。",
-                        "front_view_prompt": "古代仙侠风格，【中国古代·仙侠】长老，男 60岁，身高170cm，写实电影感风格，正面特写全身站立，纯白背景。白色长发束髻，木质道冠束发；白眉长须，仙风道骨；灰色宽袖道袍；手持拂尘。",
-                        "side_view_prompt": "古代仙侠风格，【中国古代·仙侠】长老，男 60岁，身高170cm，写实电影感风格，侧面全身站立，展示道袍侧轮廓，纯白背景。白色长发束髻侧面，木质道冠侧影；灰色宽袖道袍侧面；手持拂尘侧面。",
-                        "back_view_prompt": "古代仙侠风格，【中国古代·仙侠】长老，男 60岁，身高170cm，写实电影感风格，背面全身站立，展示道袍背面设计，纯白背景。白色长发束髻背面，木质道冠背面；灰色宽袖道袍背面。",
-                    }
-                ],
+                "design_prompt": "【中国古代·仙侠】长老，男 60岁，8k 类 3D 游戏 cg 电影风格，包括左侧人物全身设计图含衣着细节，右侧画面三视图，同时左侧上方为人物名称。画面从左到右排列三个视角。白色长发束髻木质道冠；白眉长须面容清瘦；灰色宽袖道袍八卦纹样；手持拂尘。",
             },
         ],
     }
@@ -141,50 +104,26 @@ def test_execute_success():
                 "chapter_id": chapter_id,
                 "raw_text": "叶凡走到山门前。",
                 "characters": ["叶凡", "长老"],
-                "character_variants": {},
             },
             db,
         )
 
         assert result.success is True
         assert result.data is not None
-        assert result.data["variants_created"] == 2
+        assert result.data["outfits_created"] == 2
         assert set(result.data["character_names"]) == {"叶凡", "长老"}
 
-        # Verify appearance_variant rows exist
-        variants = db.conn.execute(
-            "SELECT * FROM appearance_variant ORDER BY id"
+        # Verify character_outfit rows exist (not appearance_variant)
+        outfits = db.conn.execute(
+            "SELECT * FROM character_outfit ORDER BY id"
         ).fetchall()
-        assert len(variants) == 2
+        assert len(outfits) == 2
 
-        # Verify character.default_look_id is set
-        for v in variants:
-            vd = dict(v)
-            assert vd["status"] == "done"
-            assert vd["variant_name"] == "default"
-            appearance = json.loads(vd["appearance_json"])
-            assert "full_prompt" in appearance
-            assert "古代仙侠风格" in appearance["full_prompt"]
-            # v0.5: view prompts present
-            assert "front_view_prompt" in appearance, f"front_view_prompt missing for {vd['variant_name']}"
-            assert "side_view_prompt" in appearance, f"side_view_prompt missing for {vd['variant_name']}"
-            assert "back_view_prompt" in appearance, f"back_view_prompt missing for {vd['variant_name']}"
-            assert appearance["front_view_prompt"] != ""
-            assert appearance["side_view_prompt"] != ""
-            assert appearance["back_view_prompt"] != ""
-
-            # v0.5: verify DB view columns populated
-            assert vd["front_view"] != "", f"front_view is empty for variant {vd['id']}"
-            assert vd["side_view"] != "", f"side_view is empty for variant {vd['id']}"
-            assert vd["back_view"] != "", f"back_view is empty for variant {vd['id']}"
-
-        # Check character default_look_id
-        char_rows = db.conn.execute(
-            "SELECT * FROM character_card ORDER BY id"
-        ).fetchall()
-        for c in char_rows:
-            cd = dict(c)
-            assert cd["default_look_id"] is not None, f"default_look_id is NULL for {cd['name']}"
+        for o in outfits:
+            od = dict(o)
+            assert od["tag"] == "默认"
+            assert od["is_default"] == 1
+            assert "古代仙侠" in od["prompt"] or "中国古代" in od["prompt"]
 
         # Check agent status
         status = db.get_agent_status("char-designer", chapter_id)
