@@ -1,7 +1,8 @@
-"""Image Generator Agent — generates real images for character variants and scenes.
+"""Image Generator Agent — generates design sheet images for character outfits
+and multi-view images for scenes.
 
-Uses DoubaoBrowserClient to turn composite three-view / multi-view prompts
-into actual image files, with CLI interactive selection from 4 candidates,
+Uses DoubaoBrowserClient to turn prompts into actual image files,
+with CLI interactive selection from 4 candidates,
 then saves chosen file paths back to the database.
 """
 
@@ -51,14 +52,9 @@ class ImageGeneratorAgent(AgentInterface):
         entity_type: str,
         reference_images: list[str] | None = None,
     ) -> bool:
-        """Generate composite image for one entity. Returns True if an image was saved.
+        """Generate and save an image for one entity. Returns True if an image was saved.
 
-        Flow: optionally paste reference images → send composite prompt →
-        Doubao returns up to 4 candidates → CLI user selects → save → cleanup.
-
-        For character three-view variants: if entity has face_closeup_prompt
-        and no face_closeup_image yet, caller should generate face closeup
-        first and pass it as reference_images.
+        Flow: Doubao returns up to 4 candidates → CLI user selects → save → cleanup.
         """
         prompt = entity.get(prompt_field, "")
         if not prompt:
