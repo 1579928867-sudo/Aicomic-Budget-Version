@@ -1,8 +1,11 @@
 """Shot Video Generator Agent — generates video clips per storyboard shot.
 
 Reuses the Doubao text-to-image page: pastes the shot's reference images
-(character three-view + scene multi-view) and sends a "生成视频，Xs，..." prompt.
+(character design sheet + scene multi-view) and sends a "生成视频，Xs，..." prompt.
 Doubao auto-switches to its video model and returns mp4 files.
+
+v0.9: Character images come from character_outfit (single design sheet),
+not appearance_variant (face closeup + three-view).
 
 Interactive mode (half-auto): user selects from generated candidates via CLI,
 same as ImageGenerator's selection flow.
@@ -29,6 +32,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
 
     Pipeline position: after ShotVisualizer, before VideoComposer.
     Only runs when --with-video is passed and video_backend is "doubao".
+    v0.9: Uses single character design sheet images (not face closeup + three-view).
     """
 
     agent_name = "shot-video-generator"
@@ -54,67 +58,33 @@ class ShotVideoGeneratorAgent(AgentInterface):
     def _resolve_reference_images(
         self, db: Database, shot: dict, script_id: int
     ) -> list[str]:
-        """Find reference images for a shot: face closeup + three-view + scene multi-view.
+        """Find reference images for a shot: character design sheets + scene multi-view.
 
-        Uses script JSON to resolve which variant each character uses in this shot,
-        NOT just the default variant.
+        v0.9: Each character contributes ONE design sheet image (from character_outfit),
+        resolved by shot.outfit_tag. No more face closeup + three-view.
         """
         images: list[str] = []
 
-        # ── Build char_id → variant_name map from script JSON ──
-        char_variant: dict[int, str] = {}
-        script_rows = db.conn.execute(
-            "SELECT raw_json FROM script WHERE id = ?", (script_id,)
-        ).fetchone()
-        shot_num = shot["shot_num"]
-        if script_rows:
-            script_json = json.loads(script_rows["raw_json"])
-            for scene in script_json.get("scenes", []):
-                for shot_data in scene.get("shots", []):
-                    if shot_data.get("shot_num") == shot_num:
-                        for char in shot_data.get("characters", []):
-                            cname = char.get("name", "")
-                            crow = db.conn.execute(
-                                "SELECT id FROM character_card WHERE name = ?",
-                                (cname,),
-                            ).fetchone()
-                            if crow:
-                                char_variant[crow["id"]] = char.get("variant", "default")
-                        break  # Only this shot's characters matter
-
-        # ── Character images (face closeup + three-view) ──
+        # ── Character design sheet images ──
         char_ids_raw = shot.get("char_ids", "[]")
         try:
             char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
         except (json.JSONDecodeError, TypeError):
             char_ids = []
 
-        for char_id in char_ids:
-            variant_name = char_variant.get(char_id, "default")
-            # Match the EXACT variant used in this shot
-            row = db.conn.execute(
-                """SELECT three_view_image, face_closeup_image FROM appearance_variant
-                   WHERE character_id = ? AND variant_name = ? AND three_view_image != ''
-                   LIMIT 1""",
-                (char_id, variant_name),
-            ).fetchone()
-            if not row:
-                # Fallback: any variant for this character
-                row = db.conn.execute(
-                    """SELECT three_view_image, face_closeup_image FROM appearance_variant
-                       WHERE character_id = ? AND three_view_image != ''
-                       ORDER BY type = 'default' DESC LIMIT 1""",
-                    (char_id,),
-                ).fetchone()
-            if row:
-                face_path = row["face_closeup_image"] or ""
-                if face_path and Path(face_path).exists():
-                    images.append(face_path)
-                tv_path = row["three_view_image"] or ""
-                if tv_path and Path(tv_path).exists():
-                    images.append(tv_path)
+        outfit_tag = shot.get("outfit_tag")  # None → default
 
-        # ── Scene multi-view image ──
+        for char_id in char_ids:
+            outfit = db.get_character_outfit(char_id, outfit_tag)
+            if not outfit:
+                # Fallback: default outfit
+                outfit = db.get_character_outfit(char_id, None)
+            if outfit:
+                img_path = outfit.get("image_path", "")
+                if img_path and Path(img_path).exists():
+                    images.append(img_path)
+
+        # ── Scene multi-view image (unchanged) ──
         scene_id = shot.get("scene_id")
         if scene_id:
             row = db.conn.execute(
@@ -170,9 +140,8 @@ class ShotVideoGeneratorAgent(AgentInterface):
 
         parts.append(
             "高质量AI视频，流畅运镜，电影级画面。"
-            "参考图说明：第1张为角色面部特写（锚定五官和面部轮廓）；"
-            "第2张为角色三视图（左侧面-中正面-右背面，展示全身服装和体型）；"
-            "第3张为场景多景别设定（白线分隔：上方全景空间环境、中间中景核心区域、下方特写材质道具）。"
+            "参考图说明：人物参考图为角色设定图（含全身设计+三视图+人物简介+装备细节）；"
+            "场景参考图为多景别设定。"
         )
 
         return "".join(parts)
