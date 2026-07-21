@@ -56,7 +56,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
     # ── Reference image resolution ──
 
     def _resolve_reference_images(
-        self, db: Database, shot: dict, script_id: int
+        self, db: Database, shot: dict
     ) -> list[str]:
         """Find reference images for a shot: character design sheets + scene multi-view.
 
@@ -254,8 +254,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                 label = f"镜头 {shot_num} ({si+1}/{len(shots_to_generate)})"
                 print(f"\n  [{label}]")
 
-                # Resolve reference images (script_id for variant matching)
-                ref_images = self._resolve_reference_images(db, shot, script_id)
+                ref_images = self._resolve_reference_images(db, shot)
                 if not ref_images:
                     db.log(
                         self.agent_name, chapter_id, "shot_skipped_no_refs",
