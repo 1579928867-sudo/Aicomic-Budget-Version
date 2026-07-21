@@ -508,6 +508,77 @@ class Database:
         )
         self.conn.commit()
 
+    # ── Character Outfits (v0.9) ──
+
+    def create_character_outfit(
+        self,
+        character_id: int,
+        tag: str,
+        prompt: str = "",
+        image_path: str = "",
+        is_default: int = 0,
+        activation_condition: str = "",
+    ) -> int:
+        """Create or replace a character_outfit row. Returns the outfit id."""
+        cursor = self.conn.execute(
+            """INSERT INTO character_outfit
+               (character_id, tag, prompt, image_path, is_default, activation_condition)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(character_id, tag) DO UPDATE SET
+               prompt = excluded.prompt,
+               image_path = excluded.image_path,
+               is_default = excluded.is_default,
+               activation_condition = excluded.activation_condition""",
+            (character_id, tag, prompt, image_path, is_default, activation_condition),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_character_outfit(
+        self, character_id: int, tag: str | None = None
+    ) -> dict | None:
+        """Get outfit for a character. If tag is None, returns the default (is_default=1)."""
+        if tag:
+            row = self.conn.execute(
+                """SELECT * FROM character_outfit
+                   WHERE character_id = ? AND tag = ? LIMIT 1""",
+                (character_id, tag),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                """SELECT * FROM character_outfit
+                   WHERE character_id = ? AND is_default = 1 LIMIT 1""",
+                (character_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def get_character_outfits(self, character_id: int) -> list[dict]:
+        """Get all outfits for a character, default first."""
+        rows = self.conn.execute(
+            """SELECT * FROM character_outfit
+               WHERE character_id = ? ORDER BY is_default DESC, id""",
+            (character_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_outfit_image(self, outfit_id: int, image_path: str):
+        """Update image_path on a character_outfit."""
+        self.conn.execute(
+            "UPDATE character_outfit SET image_path = ? WHERE id = ?",
+            (image_path, outfit_id),
+        )
+        self.conn.commit()
+
+    def update_shot_outfit_tag(self, shot_id: int, outfit_tag: str | None):
+        """Update outfit_tag on a storyboard_shot."""
+        self.conn.execute(
+            "UPDATE storyboard_shot SET outfit_tag = ? WHERE id = ?",
+            (outfit_tag, shot_id),
+        )
+        self.conn.commit()
+
     # ── Agent Status (幂等性基础) ──
 
     def get_agent_status(self, agent_name: str, chapter_id: int) -> str | None:
