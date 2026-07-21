@@ -50,7 +50,7 @@ class _FakeCharDesigner(AgentInterface):
         db.set_agent_status(self.agent_name, chapter_id, "done")
         return AgentResult(
             success=True,
-            data={"variants_created": 2, "character_names": input_data.get("characters", [])},
+            data={"outfits_created": 2, "character_names": input_data.get("characters", [])},
         )
 
 
@@ -68,6 +68,23 @@ class _FakeSceneDesigner(AgentInterface):
         return AgentResult(
             success=True,
             data={"scenes_updated": 2, "scene_names": input_data.get("scenes_list", [])},
+        )
+
+
+class _FakeOutfitManager(AgentInterface):
+    """Minimal fake for the Outfit Manager agent."""
+
+    agent_name = "outfit-manager"
+
+    def validate_input(self, input_data: dict) -> bool:
+        return "chapter_id" in input_data and "script_id" in input_data
+
+    def execute(self, input_data: dict, db) -> AgentResult:
+        chapter_id = input_data["chapter_id"]
+        db.set_agent_status(self.agent_name, chapter_id, "done")
+        return AgentResult(
+            success=True,
+            data={"outfits_generated": 0, "shots_tagged": 5},
         )
 
 
@@ -150,6 +167,7 @@ def _register_all_agents(
     bus.register(_FakeScreenwriter())
     bus.register(_FakeCharDesigner())
     bus.register(_FakeSceneDesigner())
+    bus.register(_FakeOutfitManager())
     if with_image_generator:
         bus.register(_FakeImageGenerator())
     bus.register(_FakeShotVisualizer())
@@ -181,7 +199,7 @@ def test_orchestrator_run_chapter_success():
         assert result.data["script_id"] == 1
         assert result.data["characters"] == ["张三"]
         assert result.data["scenes_list"] == ["大殿"]
-        assert result.data["char_variants_created"] == 2
+        assert result.data["outfits_created"] == 2
         assert result.data["scenes_updated"] == 2
     finally:
         db.close()
@@ -321,52 +339,16 @@ class FakeLLMForCharDesigner:
                     "aliases": [],
                     "gender": "男",
                     "age": 18,
-                    "height_cm": 178,
                     "is_human": True,
-                    "variants": [
-                        {
-                            "variant_name": "default",
-                            "hair": "黑色长发束髻",
-                            "head_accessories": "白玉发冠",
-                            "makeup": "剑眉星目",
-                            "face": "清秀俊朗，肤色白净",
-                            "aura": "气质坚毅",
-                            "upper_body": "白色交领长袍，云纹刺绣",
-                            "lower_body": "同色系长衫，墨玉腰带",
-                            "footwear": "黑色云纹布靴",
-                            "accessories": "左手天毒珠印记",
-                            "full_prompt": "古代仙侠风格，【中国古代·仙侠】叶凡，男 18岁，身高178cm，九头身比例，写实电影感风格，正面，站立的全身图片，图片人物背景为纯白色。黑色长发束髻，白玉发冠束发；剑眉星目，清秀俊朗面容，肤色白净，气质坚毅；上身白色交领长袍，云纹刺绣；下身同色系长衫，墨玉腰带；脚上黑色云纹布靴；配饰左手天毒珠印记；双手自然下垂，手里无任何物品。",
-                            "front_view_prompt": "古代仙侠风格，写实电影感风格，正面特写全身站立图片，纯白背景。叶凡。",
-                            "side_view_prompt": "古代仙侠风格，写实电影感风格，侧面全身站立图片，纯白背景。叶凡。",
-                            "back_view_prompt": "古代仙侠风格，写实电影感风格，背面全身站立图片，纯白背景。叶凡。",
-                        }
-                    ],
+                    "design_prompt": "【中国古代·仙侠】叶凡，男 18岁，8k 类 3D 游戏 cg 电影风格，包括左侧人物全身设计图含衣着细节，右侧画面三视图，同时左侧上方为人物名称。黑色长发束髻，白玉发冠；白色交领长袍，云纹刺绣；同色系长衫，墨玉腰带；黑色云纹布靴；左手天毒珠印记。",
                 },
                 {
                     "name": "长老",
                     "aliases": [],
                     "gender": "男",
                     "age": 60,
-                    "height_cm": 170,
                     "is_human": True,
-                    "variants": [
-                        {
-                            "variant_name": "default",
-                            "hair": "白色长发束髻",
-                            "head_accessories": "木质道冠",
-                            "makeup": "白眉长须，仙风道骨",
-                            "face": "面容清瘦，皱纹深刻",
-                            "aura": "气质威严深邃",
-                            "upper_body": "灰色宽袖道袍",
-                            "lower_body": "同色系长裤",
-                            "footwear": "黑色布鞋",
-                            "accessories": "手持拂尘",
-                            "full_prompt": "古代仙侠风格，【中国古代·仙侠】长老，男 60岁，身高170cm，九头身比例，写实电影感风格，正面，站立的全身图片，图片人物背景为纯白色。白色长发束髻，木质道冠束发；白眉长须，仙风道骨，面容清瘦，皱纹深刻，气质威严深邃；上身灰色宽袖道袍；下身同色系长裤；脚上黑色布鞋；配饰手持拂尘；双手自然下垂，手里无任何物品。",
-                            "front_view_prompt": "古代仙侠风格，写实电影感风格，正面特写全身站立图片，纯白背景。长老。",
-                            "side_view_prompt": "古代仙侠风格，写实电影感风格，侧面全身站立图片，纯白背景。长老。",
-                            "back_view_prompt": "古代仙侠风格，写实电影感风格，背面全身站立图片，纯白背景。长老。",
-                        }
-                    ],
+                    "design_prompt": "【中国古代·仙侠】长老，男 60岁，8k 类 3D 游戏 cg 电影风格，包括左侧人物全身设计图含衣着细节，右侧画面三视图，同时左侧上方为人物名称。白色长发束髻，木质道冠；灰色宽袖道袍；同色系长裤；黑色布鞋；手持拂尘。",
                 },
             ],
         }
@@ -435,6 +417,7 @@ def test_full_pipeline_integration():
     from aicomic.agents.char_designer import CharacterDesignerAgent
     from aicomic.agents.scene_designer import SceneDesignerAgent
     from aicomic.agents.shot_visualizer import ShotVisualizerAgent
+    from aicomic.agents.outfit_manager import OutfitManagerAgent
 
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
@@ -453,12 +436,14 @@ def test_full_pipeline_integration():
         char_designer = CharacterDesignerAgent(llm_client=FakeLLMForCharDesigner())
         scene_designer = SceneDesignerAgent(llm_client=FakeLLMForSceneDesigner())
         shot_visualizer = ShotVisualizerAgent(llm_client=FakeLLMForShotVisualizer())
+        outfit_manager = OutfitManagerAgent(llm_client=FakeClaudeForIntegration())
 
         bus = AgentBus()
         bus.register(screenwriter)
         bus.register(char_designer)
         bus.register(scene_designer)
         bus.register(shot_visualizer)
+        bus.register(outfit_manager)
 
         orchestrator = Orchestrator(bus, db)
 
@@ -471,7 +456,7 @@ def test_full_pipeline_integration():
         assert result.data["script_id"] == 1
         assert set(result.data["characters"]) == {"叶凡", "长老"}
         assert result.data["scenes_list"] == ["山门", "大殿"]
-        assert result.data["char_variants_created"] == 2
+        assert result.data["outfits_created"] == 2
         assert result.data["scenes_updated"] == 2
         assert result.data["shots_visualized"] == 3
 
@@ -505,25 +490,21 @@ def test_full_pipeline_integration():
         assert "山门" in scene_names
         assert "大殿" in scene_names
 
-        # Verify DB: appearance variants created
-        variants = db.conn.execute(
-            "SELECT * FROM appearance_variant ORDER BY id"
+        # Verify DB: character outfits created
+        outfits = db.conn.execute(
+            "SELECT * FROM character_outfit ORDER BY id"
         ).fetchall()
-        assert len(variants) == 2, f"Expected 2 variants, got {len(variants)}"
-        for v in variants:
-            vd = dict(v)
-            # v0.5: view columns populated
-            assert vd["front_view"] != "", f"Variant {vd['id']} front_view empty"
-            assert vd["side_view"] != "", f"Variant {vd['id']} side_view empty"
-            assert vd["back_view"] != "", f"Variant {vd['id']} back_view empty"
+        assert len(outfits) == 2, f"Expected 2 outfits, got {len(outfits)}"
+        for o in outfits:
+            od = dict(o)
+            assert od["prompt"] != "", f"Outfit {od['id']} prompt empty"
+            assert od["is_default"] == 1, f"Outfit {od['id']} should be default"
 
-        # Verify DB: character default_look_id set
+        # Verify DB: character card entries exist
         char_rows = db.conn.execute(
             "SELECT * FROM character_card ORDER BY id"
         ).fetchall()
-        for c in char_rows:
-            cd = dict(c)
-            assert cd["default_look_id"] is not None, f"{cd['name']} has NULL default_look_id"
+        assert len(char_rows) == 2, f"Expected 2 characters, got {len(char_rows)}"
 
         # Verify DB: scene descriptions filled
         scene_rows = db.conn.execute(
@@ -542,6 +523,7 @@ def test_full_pipeline_integration():
         assert db.get_agent_status("screenwriter", chapter_id) == "done"
         assert db.get_agent_status("char-designer", chapter_id) == "done"
         assert db.get_agent_status("scene-designer", chapter_id) == "done"
+        assert db.get_agent_status("outfit-manager", chapter_id) == "done"
         assert db.get_agent_status("shot-visualizer", chapter_id) == "done"
         # Video generator should NOT have run (with_video=False by default)
         assert db.get_agent_status("video-generator", chapter_id) is None
@@ -628,6 +610,7 @@ def test_full_pipeline_integration_with_video():
     from aicomic.agents.char_designer import CharacterDesignerAgent
     from aicomic.agents.scene_designer import SceneDesignerAgent
     from aicomic.agents.shot_visualizer import ShotVisualizerAgent
+    from aicomic.agents.outfit_manager import OutfitManagerAgent
     from aicomic.agents.video_generator import VideoGeneratorAgent
     from aicomic.doubao.client import MockVideoGenerator
 
@@ -647,6 +630,7 @@ def test_full_pipeline_integration_with_video():
         char_designer = CharacterDesignerAgent(llm_client=FakeLLMForCharDesigner())
         scene_designer = SceneDesignerAgent(llm_client=FakeLLMForSceneDesigner())
         shot_visualizer = ShotVisualizerAgent(llm_client=FakeLLMForShotVisualizer())
+        outfit_manager = OutfitManagerAgent(llm_client=FakeClaudeForIntegration())
         video_agent = VideoGeneratorAgent(
             llm_client=FakeLLMForShotVisualizer(),
             video_generator=MockVideoGenerator(output_dir=Path("/tmp")),
@@ -657,6 +641,7 @@ def test_full_pipeline_integration_with_video():
         bus.register(char_designer)
         bus.register(scene_designer)
         bus.register(shot_visualizer)
+        bus.register(outfit_manager)
         bus.register(video_agent)
 
         orchestrator = Orchestrator(bus, db)

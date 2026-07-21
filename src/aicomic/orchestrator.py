@@ -1,26 +1,27 @@
 """Orchestrator — coordinates the multi-agent pipeline.
 
-v0.8 pipeline: Screenwriter → CharDesigner → SceneDesigner → ImageGenerator
-→ ShotVisualizer → ShotVideoGenerator → VideoGenerator → VideoComposer
+v0.9 pipeline: Screenwriter → CharDesigner → SceneDesigner → OutfitManager
+→ ImageGenerator → ShotVisualizer → ShotVideoGenerator → VideoGenerator → VideoComposer
 """
-
-import json
 
 from .interface import AgentResult
 from .bus import AgentBus
 from .db.repository import Database
+from .agents.outfit_manager import OutfitManagerAgent
 
 
 class Orchestrator:
     """Coordinates Agent execution through the pipeline.
 
-    Pipeline steps (v0.5):
+    Pipeline steps (v0.9):
         1. Screenwriter — generate script from raw text
-        2. Character Designer — generate appearance descriptions
+        2. Character Designer — generate design sheet prompts
         3. Scene Designer — generate scene environment descriptions
-        4. Shot Visualizer — generate per-shot composite image prompts
-        5. Video Generator — generate video clips from shots (optional)
-        6. Video Composer — stitch clips into final video with subtitles (optional)
+        4. Outfit Manager — detect outfit changes, tag shots
+        5. Image Generator — generate design sheet + scene images (optional)
+        6. Shot Visualizer — generate per-shot composite image prompts
+        7. Shot Video Generator — image-to-video per shot (optional)
+        8. Video Composer — stitch clips into final video (optional)
 
     Usage:
         orchestrator = Orchestrator(bus, db)
@@ -32,30 +33,6 @@ class Orchestrator:
         self.bus = bus
         self.db = db
 
-    def _extract_character_variants(self, script_id: int) -> dict[str, list[str]]:
-        """Scan storyboard shots for character variants (non-default).
-
-        Returns mapping of character_name → list of unique variant names.
-        """
-        variants: dict[str, set[str]] = {}
-
-        script_rows = self.db.conn.execute(
-            "SELECT raw_json FROM script WHERE id = ?", (script_id,)
-        ).fetchone()
-        if script_rows:
-            raw = json.loads(script_rows["raw_json"])
-            for scene in raw.get("scenes", []):
-                for shot in scene.get("shots", []):
-                    for char in shot.get("characters", []):
-                        name = char.get("name", "")
-                        variant = char.get("variant", "default")
-                        if variant != "default":
-                            if name not in variants:
-                                variants[name] = set()
-                            variants[name].add(variant)
-
-        return {name: sorted(vs) for name, vs in variants.items()}
-
     def run_chapter(
         self, chapter_id: int, raw_text: str,
         with_video: bool = False,
@@ -63,20 +40,21 @@ class Orchestrator:
     ) -> AgentResult:
         """Run the full pipeline for a single chapter.
 
-        Pipeline steps (v0.5):
+        Pipeline steps (v0.9):
             1. Screenwriter — generate script from raw text
-            2. Character Designer — generate appearance descriptions
+            2. Character Designer — generate design sheet prompts
             3. Scene Designer — generate scene environment descriptions
-            3.5. Image Generator — generate real images from view prompts (optional)
-            4. Shot Visualizer — generate per-shot composite image prompts
-            5. Video Generator — generate video clips (optional, only if with_video=True)
-            6. Video Composer — stitch clips into final video with subtitles (optional)
+            4. Outfit Manager — detect outfit changes, tag shots
+            5. Image Generator — generate design sheet + scene images (optional)
+            6. Shot Visualizer — generate per-shot composite image prompts
+            7. Shot Video Generator — image-to-video per shot (optional)
+            8. Video Composer — stitch clips into final video (optional)
 
         Args:
             chapter_id: ID of the chapter to process.
             raw_text: The raw chapter text.
-            with_video: If True, also run video generation (Steps 5-6).
-            with_images: If True, also run image generation (Step 3.5).
+            with_video: If True, also run video generation (Steps 7-8).
+            with_images: If True, also run image generation (Step 5).
 
         Returns:
             AgentResult with the final status.
@@ -117,10 +95,6 @@ class Orchestrator:
               f"{len(scenes_list)} 场景, {shot_count} 镜头")
 
         # ── Step 2: Character Designer ──
-        char_variants = {}
-        if script_id:
-            char_variants = self._extract_character_variants(script_id)
-
         char_result = self.bus.run(
             "char-designer",
             {
@@ -128,7 +102,6 @@ class Orchestrator:
                 "raw_text": raw_text,
                 "characters": characters,
                 "script_id": script_id,
-                "character_variants": char_variants,
             },
             self.db,
         )
@@ -141,9 +114,9 @@ class Orchestrator:
             )
             # Non-fatal — continue with scene designer even if char designer fails
 
-        char_variants_created = char_result.data.get("variants_created", 0) if char_result.data else 0
+        outfits_created = char_result.data.get("outfits_created", 0) if char_result.data else 0
         char_names = char_result.data.get("character_names", []) if char_result.data else []
-        print(f"  ✓ Character Designer: {char_variants_created} 外观变体 ({', '.join(char_names) if char_names else 'N/A'})")
+        print(f"  ✓ Character Designer: {outfits_created} 角色设定图提示词 ({', '.join(char_names) if char_names else 'N/A'})")
 
         # ── Step 3: Scene Designer ──
         scene_result = self.bus.run(
@@ -167,6 +140,22 @@ class Orchestrator:
         scenes_updated = scene_result.data.get("scenes_updated", 0) if scene_result.data else 0
         scene_names = scene_result.data.get("scene_names", []) if scene_result.data else []
         print(f"  ✓ Scene Designer: {scenes_updated} 场景 ({', '.join(scene_names) if scene_names else 'N/A'})")
+
+        # ── Step 3.2: Outfit Manager (detect outfit changes, tag shots) ──
+        outfit_result = self.bus.run(
+            "outfit-manager",
+            {"chapter_id": chapter_id, "script_id": script_id},
+            self.db,
+        )
+        if outfit_result.success:
+            outfits_gen = outfit_result.data.get("outfits_generated", 0) if outfit_result.data else 0
+            shots_tagged = outfit_result.data.get("shots_tagged", 0) if outfit_result.data else 0
+            if outfits_gen > 0:
+                print(f"  ✓ Outfit Manager: {outfits_gen} 新服饰标签, {shots_tagged} 镜头已标记")
+            else:
+                print(f"  ⏭ Outfit Manager: 无换装检测, {shots_tagged} 镜头已标记")
+        else:
+            print(f"  ⚠ Outfit Manager: {outfit_result.error}")
 
         # ── Step 3.5: Image Generator (optional) ──
         img_result = None
@@ -290,6 +279,7 @@ class Orchestrator:
                 "script_id": script_id,
                 "char_designer": "ok" if char_result.success else "failed",
                 "scene_designer": "ok" if scene_result.success else "failed",
+                "outfit_manager": "ok" if outfit_result.success else "failed",
                 "image_generator": "ok" if (img_result and img_result.success) else ("skipped" if not with_images else "failed"),
                 "shot_visualizer": "ok" if shot_vis_result.success else "failed",
                 "shot_video_generator": "ok" if (shot_video_result and shot_video_result.success) else ("skipped" if not with_video else "failed"),
@@ -305,7 +295,9 @@ class Orchestrator:
                 "script_id": script_id,
                 "characters": characters,
                 "scenes_list": scenes_list,
-                "char_variants_created": char_result.data.get("variants_created", 0) if char_result.data else 0,
+                "outfits_created": char_result.data.get("outfits_created", 0) if char_result.data else 0,
+                "outfits_detected": outfit_result.data.get("outfits_generated", 0) if (outfit_result and outfit_result.data) else 0,
+                "outfits_processed": outfit_result.data.get("shots_tagged", 0) if (outfit_result and outfit_result.data) else 0,
                 "scenes_updated": scene_result.data.get("scenes_updated", 0) if scene_result.data else 0,
                 "images_generated": img_result.data.get("images_generated", 0) if (img_result and img_result.data) else 0,
                 "variants_processed": img_result.data.get("variants_processed", 0) if (img_result and img_result.data) else 0,
