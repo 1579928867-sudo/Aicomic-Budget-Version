@@ -7,7 +7,6 @@ v0.9 pipeline: Screenwriter → CharDesigner → SceneDesigner → OutfitManager
 from .interface import AgentResult
 from .bus import AgentBus
 from .db.repository import Database
-from .agents.outfit_manager import OutfitManagerAgent
 
 
 class Orchestrator:
@@ -167,10 +166,10 @@ class Orchestrator:
             )
             if img_result.success:
                 imgs = img_result.data.get("images_generated", 0) if img_result.data else 0
-                vars_p = img_result.data.get("variants_processed", 0) if img_result.data else 0
+                outfits_p = img_result.data.get("outfits_processed", 0) if img_result.data else 0
                 scenes_p = img_result.data.get("scenes_processed", 0) if img_result.data else 0
                 if imgs > 0:
-                    print(f"  ✓ Image Generator: {imgs} 张图片 ({vars_p} 角色变体, {scenes_p} 场景)")
+                    print(f"  ✓ Image Generator: {imgs} 张图片 ({outfits_p} 角色设定图, {scenes_p} 场景)")
                 else:
                     print(f"  ⚠ Image Generator: 0 张图片 (无可生成内容或全部失败)")
             else:
@@ -300,7 +299,7 @@ class Orchestrator:
                 "outfits_processed": outfit_result.data.get("shots_tagged", 0) if (outfit_result and outfit_result.data) else 0,
                 "scenes_updated": scene_result.data.get("scenes_updated", 0) if scene_result.data else 0,
                 "images_generated": img_result.data.get("images_generated", 0) if (img_result and img_result.data) else 0,
-                "variants_processed": img_result.data.get("variants_processed", 0) if (img_result and img_result.data) else 0,
+                "outfits_processed": img_result.data.get("outfits_processed", 0) if (img_result and img_result.data) else 0,
                 "scenes_processed": img_result.data.get("scenes_processed", 0) if (img_result and img_result.data) else 0,
                 "shots_visualized": shot_vis_result.data.get("shots_processed", 0) if shot_vis_result.data else 0,
                 "shot_video_clips": shot_video_result.data.get("clips_created", 0) if (shot_video_result and shot_video_result.data) else 0,

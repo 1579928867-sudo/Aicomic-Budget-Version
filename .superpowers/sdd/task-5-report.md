@@ -1,80 +1,78 @@
-# Task 5 Report: Image Generator Core Refactor
+# Task 5: OutfitManager Agent — Report
 
-## What Was Implemented
+## Status
 
-### `src/aicomic/agents/image_generator.py` (modified, 255 lines)
+Complete.
 
-The file was rewritten from the old per-view generation approach (3 separate calls per entity for front/side/back views) to the new composite-prompt approach (1 call per entity with CLI interactive candidate selection).
+## Commits
 
-**Key changes:**
+- `df5e00c` `feat(outfit-manager): new agent for outfit change detection and matching`
 
-| Section | Lines | Description |
-|---------|-------|-------------|
-| Imports + docstring | 1-17 | Replaced `Callable` with `os`, `subprocess`, `sys`, `Path`. Updated docstring. |
-| `_process_entity()` | 44-107 | **New method** (replaces `_process_views`). One call per entity. Sends composite prompt to Doubao, handles auto-save (1 candidate) or CLI user selection (multiple candidates), deletes unchosen files. |
-| `_user_select_image()` | 109-150 | **New method**. Opens candidates with system viewer (`os.startfile` on Windows, `open` on macOS, `xdg-open` on Linux), prompts user, returns chosen path or `None` on cancel. |
-| `execute()` | 152-254 | **Rewritten**. Now queries `three_view_prompt` / `multi_view_prompt` columns (not old per-view columns). Iterates entities calling `_process_entity`. Same `AgentResult` shape. |
+## Test Summary
 
-### `tests/test_image_generator.py` (updated)
+- Module loads correctly via `from aicomic.agents.outfit_manager import OutfitManagerAgent, OutfitDecision, _OUTFIT_CHANGE_KEYWORDS`
+- `agent_name` resolves to `"outfit-manager"`
+- `_OUTFIT_CHANGE_KEYWORDS` list has 23 entries
+- `OutfitDecision` dataclass instantiates and prints correctly
+- Import via full module path works (same pattern as existing agents)
 
-Updated to align with the new composite-prompt flow:
+## File Created
 
-| Change | Description |
-|--------|-------------|
-| `FakeBrowserClient` | Now populates `file_paths=[path]` in returned `ImageResult`. |
-| `_setup_full_data` | Sets `three_view_prompt` and `multi_view_prompt` (composite columns) instead of old per-view prompts. |
-| `test_execute_success` | Updated assertions: 2 images (1 variant + 1 scene composite), checks `three_view_image` / `multi_view_image` columns. |
+- `D:/first_agent/src/aicomic/agents/outfit_manager.py` (345 lines)
 
-### `tests/test_char_designer.py` and `tests/test_scene_designer.py` (fixed)
+## Fix report
 
-Both had `_make_db()` calling `init_schema()` but not `migrate_schema()`. Since the new schema columns are added via migrations, this caused `no such column` errors. Added `db.migrate_schema()` call in both files.
+Commit: `30ba246` `fix(outfit-manager): refactor execute, fix import placement, remove unused param, add error logging`
 
-## Test Results
+All five changes applied to `src/aicomic/agents/outfit_manager.py`:
 
-### Exact commands and output
+### Fix 1 (Critical) — Refactor execute()
+Extracted two helper methods:
+- `_resolve_character_name(char_id, db) -> str` — replaces inline `db.conn.execute()` character name lookup
+- `_apply_outfit_decision(decision, char_id, shot_id, char_current_tags, db, char_name) -> tuple[int, int]` — handles the three decision branches (None/existing/new), returns (outfits_generated_delta, shots_tagged_delta)
 
+Simplified `execute()` from ~110 lines to ~45 lines of real logic. The loop body now calls `_resolve_character_name()` and delegates branch handling to `_apply_outfit_decision()`.
+
+### Fix 2 (Medium) — Move `import json` to top of file
+Removed the inline `import json` inside the `for shot in shots:` loop (was at line 272). Added `import json` at module level with standard library imports (`from dataclasses import dataclass, import json, from typing import Any`).
+
+### Fix 3 (Medium) — Remove unused `current_tag` parameter from `detect_outfit_change()`
+The `current_tag` parameter was passed in but never referenced in the method body. Removed it from the signature and updated the single caller in `execute()`.
+
+### Fix 4 (Low) — Add `db.log()` before `except Exception: return None` in `_llm_detect_outfit()`
+Added `db.log(self.agent_name, -1, "llm_detect_error", ...)` in the except block. Also added `db` parameter to the method signature.
+
+### Fix 5 (Low) — Add `db.log()` before `except Exception: return ""` in `_generate_outfit_prompt()`
+Added `db.log(self.agent_name, -1, "generate_prompt_error", ...)` in the except block. Also added `db` parameter to the method signature.
+
+### Verification
 ```
-$ python -m pytest tests/test_image_generator.py -v
-
-============================= test session starts =============================
-collected 7 items
-
-tests/test_image_generator.py::test_validate_input_valid PASSED
-tests/test_image_generator.py::test_validate_input_missing_script_id PASSED
-tests/test_image_generator.py::test_validate_input_missing_chapter_id PASSED
-tests/test_image_generator.py::test_execute_success PASSED
-tests/test_image_generator.py::test_execute_skips_when_already_done PASSED
-tests/test_image_generator.py::test_execute_all_browser_calls_fail PASSED
-tests/test_image_generator.py::test_execute_no_variants_no_scenes PASSED
-======================= 7 passed in 0.20s =============================
+import sys; sys.path.insert(0,'src'); from aicomic.agents.outfit_manager import OutfitManagerAgent, OutfitDecision, _OUTFIT_CHANGE_KEYWORDS; print('OK'); print('agent:', OutfitManagerAgent.agent_name)
 ```
+Output: `OK` / `agent: outfit-manager`
 
-Full suite:
+## Implementation Details
 
-```
-$ python -m pytest tests/ -v
-======================= 81 passed, 3 skipped in 18.83s ========================
-```
+- **Agent class**: `OutfitManagerAgent(AgentInterface)` with `agent_name = "outfit-manager"`
+  - `validate_input()`: checks `chapter_id` and `script_id` are `int`
+  - `execute()`: full pipeline that scans all shots per chapter, detects outfit changes at scene transitions, creates new outfit records, and tags shots
+  - `detect_outfit_change()`: keyword pre-filter → activation_condition check → LLM fallback
+  - `get_active_outfit()`: resolves active outfit by tag or falls back to default
+  - `_has_outfit_keywords()`: fast string-in-list check (~23 keywords)
+  - `_llm_detect_outfit()`: calls `self.llm.generate_json()` with `OUTFIT_DETECTOR_SYSTEM_PROMPT`
+  - `_generate_outfit_prompt()`: generates design prompt for new outfits via `OUTFIT_PROMPT_GENERATOR_SYSTEM_PROMPT`
 
-(3 skipped are e2e browser tests requiring real Doubao credentials.)
+- **DB interface**: Uses `db.get_character_outfit()`, `db.get_character_outfits()`, `db.create_character_outfit()`, `db.update_shot_outfit_tag()`, `db.conn.execute()` (from Task 2 repository)
 
-## Concerns and Open Questions
+- **Key patterns**:
+  - Scene-transition throttling: only runs detection when `scene_id` changes (or for first shot of each character)
+  - Existing outfit matching: first checks `activation_condition` substring match; then `tag` match post-LLM
+  - New outfits: generates `design_prompt` via LLM before creating DB record
+  - `char_ids` parsed via `json.loads()` same as `shot_video_generator.py`
+  - Full idempotency check via `db.get_agent_status()` at start
 
-1. **Test data alignment**: The original brief stated "existing tests should still pass" but the old tests exercised per-view image generation (3 views/entity), which no longer exists. Test data and assertions were updated to reflect the new composite-prompt flow. This is an expected consequence of the architectural change.
+## Concerns
 
-2. **`file_paths` population**: The `FakeBrowserClient` needed to populate `result.file_paths` — previously only `file_path` was set. This matches the real `DoubaoBrowserClient` which does populate `file_paths`.
-
-3. **Schema migration in test helpers**: Two other test files had `_make_db()` without `migrate_schema()`, which caused failures when their agents tried to access the new columns. This was a latent issue exposed by the new columns.
-
-4. **Orchestrator compatibility**: The orchestrator passes `{"chapter_id": ..., "script_id": ...}` unchanged to the image generator — no changes needed there.
-
-## Self-Review Checklist
-
-- [x] `_process_views` method removed entirely
-- [x] `_process_entity` replaces it with one-call-per-entity pattern
-- [x] `_user_select_image` handles cross-platform image opening
-- [x] `execute()` queries new columns (`three_view_prompt`, `multi_view_prompt`)
-- [x] Same `AgentResult` shape preserved (`images_generated`, `variants_processed`, `scenes_processed`)
-- [x] Syntax verified: `python -c "from ... import ImageGeneratorAgent; print('OK')"` outputs `OK`
-- [x] All existing tests pass (81 passed, 3 skipped for e2e)
-- [x] Commit made
+- `import json` is placed inside the `for shot in shots:` loop in `execute()` (same pattern as the brief specifies). For style consistency with other agents it could be top-level, but this works and follows the brief.
+- No integration test was run (requires a live database with character_outfit + storyboard_shot tables and an LLM client). Unit-level verification confirms the module loads and types are correct.
+- The agent assumes `db.conn` is available for direct SQL queries (used for character name lookup). This follows the pattern established in `shot_video_generator.py`.

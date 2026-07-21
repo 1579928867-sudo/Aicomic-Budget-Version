@@ -131,7 +131,7 @@ class OutfitManagerAgent(AgentInterface):
             )
             return result
         except Exception:
-            db.log(self.agent_name, -1, "llm_detect_error",
+            db.log(self.agent_name, self._chapter_id, "llm_detect_error",
                    {"character": character_name}, level="ERROR")
             return None
 
@@ -165,7 +165,7 @@ class OutfitManagerAgent(AgentInterface):
             )
             return result.get("design_prompt", "")
         except Exception:
-            db.log(self.agent_name, -1, "generate_prompt_error",
+            db.log(self.agent_name, self._chapter_id, "generate_prompt_error",
                    {"character": character_name, "tag": tag}, level="ERROR")
             return ""
 
@@ -270,6 +270,9 @@ class OutfitManagerAgent(AgentInterface):
             decision.activation_condition,
             db,
         )
+        if not design_prompt:
+            return (0, 0)  # LLM failed — don't create a dead outfit row
+
         db.create_character_outfit(
             character_id=char_id,
             tag=decision.tag,
@@ -292,6 +295,7 @@ class OutfitManagerAgent(AgentInterface):
         """
         chapter_id = input_data["chapter_id"]
         script_id = input_data["script_id"]
+        self._chapter_id = chapter_id
 
         existing_status = db.get_agent_status(self.agent_name, chapter_id)
         if existing_status == "done":
