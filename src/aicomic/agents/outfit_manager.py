@@ -9,6 +9,7 @@ design sheet generation on demand.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
 from ..interface import AgentInterface, AgentResult
@@ -113,7 +114,8 @@ class OutfitManagerAgent(AgentInterface):
         return False
 
     def _llm_detect_outfit(
-        self, shot_text: str, character_name: str, existing_tags: list[str]
+        self, shot_text: str, character_name: str, existing_tags: list[str],
+        db: Database,
     ) -> dict | None:
         """Call LLM to determine if an outfit change is happening."""
         try:
@@ -129,11 +131,13 @@ class OutfitManagerAgent(AgentInterface):
             )
             return result
         except Exception:
+            db.log(self.agent_name, -1, "llm_detect_error",
+                   {"character": character_name}, level="ERROR")
             return None
 
     def _generate_outfit_prompt(
         self, character_name: str, tag: str, clothing_desc: str,
-        activation_condition: str,
+        activation_condition: str, db: Database,
     ) -> str:
         """Generate a design_prompt for a new outfit via LLM.
 
@@ -161,11 +165,13 @@ class OutfitManagerAgent(AgentInterface):
             )
             return result.get("design_prompt", "")
         except Exception:
+            db.log(self.agent_name, -1, "generate_prompt_error",
+                   {"character": character_name, "tag": tag}, level="ERROR")
             return ""
 
     def detect_outfit_change(
         self, shot_text: str, character_id: int, character_name: str,
-        current_tag: str | None, db: Database,
+        db: Database,
     ) -> OutfitDecision | None:
         """Detect if this shot triggers an outfit change.
 
@@ -189,7 +195,7 @@ class OutfitManagerAgent(AgentInterface):
                 )
 
         # Step 3: LLM detection
-        result = self._llm_detect_outfit(shot_text, character_name, existing_tags)
+        result = self._llm_detect_outfit(shot_text, character_name, existing_tags, db)
         if not result or not result.get("has_change"):
             return None
 
@@ -229,6 +235,53 @@ class OutfitManagerAgent(AgentInterface):
             # Fallback to default if tag not found
         return db.get_character_outfit(character_id, None)  # default
 
+    # ── Helpers for execute ──
+
+    def _resolve_character_name(self, char_id: int, db: Database) -> str:
+        """Look up character name by id from character_card table."""
+        row = db.conn.execute(
+            "SELECT name FROM character_card WHERE id = ?", (char_id,)
+        ).fetchone()
+        return row["name"] if row else "未知"
+
+    def _apply_outfit_decision(
+        self, decision: OutfitDecision | None, char_id: int, shot_id: int,
+        char_current_tags: dict, db: Database, char_name: str,
+    ) -> tuple[int, int]:
+        """Handle the three decision branches, update db and tag tracking.
+
+        Returns:
+            (outfits_generated_delta, shots_tagged_delta)
+        """
+        if decision is None:
+            current_tag = char_current_tags.get(char_id)
+            db.update_shot_outfit_tag(shot_id, current_tag)
+            return (0, 1 if current_tag else 0)
+
+        if decision.change_type == "existing":
+            char_current_tags[char_id] = decision.tag
+            db.update_shot_outfit_tag(shot_id, decision.tag)
+            return (0, 1)
+
+        # decision.change_type == "new"
+        design_prompt = self._generate_outfit_prompt(
+            char_name, decision.tag,
+            decision.clothing_desc,
+            decision.activation_condition,
+            db,
+        )
+        db.create_character_outfit(
+            character_id=char_id,
+            tag=decision.tag,
+            prompt=design_prompt,
+            image_path="",
+            is_default=0,
+            activation_condition=decision.activation_condition,
+        )
+        char_current_tags[char_id] = decision.tag
+        db.update_shot_outfit_tag(shot_id, decision.tag)
+        return (1, 1)
+
     # ── Standalone execute (runs per-chapter, pre-processes all shots) ──
 
     def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
@@ -242,25 +295,27 @@ class OutfitManagerAgent(AgentInterface):
 
         existing_status = db.get_agent_status(self.agent_name, chapter_id)
         if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
+            db.log(self.agent_name, chapter_id, "skipped",
+                   {"reason": "already done"})
             return AgentResult(success=True, data={"status": "skipped"})
 
         db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
+        db.log(self.agent_name, chapter_id, "started",
+               {"script_id": script_id})
 
         try:
             shots = db.get_storyboard_shots(script_id)
             if not shots:
                 db.set_agent_status(self.agent_name, chapter_id, "done")
-                return AgentResult(success=True, data={"outfits_generated": 0, "shots_tagged": 0})
+                return AgentResult(success=True,
+                                   data={"outfits_generated": 0,
+                                         "shots_tagged": 0})
 
             outfits_generated = 0
             shots_tagged = 0
-
-            # Track current outfit tag per character across scenes
             char_current_tags: dict[int, str | None] = {}
-
             prev_scene_id = None
+
             for shot in shots:
                 sd = dict(shot)
                 scene_id = sd.get("scene_id")
@@ -269,7 +324,6 @@ class OutfitManagerAgent(AgentInterface):
 
                 # Resolve characters in this shot
                 char_ids_raw = sd.get("char_ids", "[]")
-                import json
                 try:
                     char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
                 except (json.JSONDecodeError, TypeError):
@@ -279,54 +333,24 @@ class OutfitManagerAgent(AgentInterface):
                 prev_scene_id = scene_id
 
                 for char_id in char_ids:
-                    # Get character name
-                    char_row = db.conn.execute(
-                        "SELECT name FROM character_card WHERE id = ?", (char_id,)
-                    ).fetchone()
-                    char_name = char_row["name"] if char_row else "未知"
-
+                    char_name = self._resolve_character_name(char_id, db)
                     current_tag = char_current_tags.get(char_id)
 
-                    # Only detect on scene transitions (节流策略1)
+                    # Throttle: only detect on scene transitions
                     if not is_scene_transition and current_tag is not None:
-                        # Inherit existing tag
                         db.update_shot_outfit_tag(shot_id, current_tag)
                         shots_tagged += 1
                         continue
 
-                    # Detect
                     decision = self.detect_outfit_change(
-                        shot_text, char_id, char_name, current_tag, db,
+                        shot_text, char_id, char_name, db,
                     )
-
-                    if decision is None:
-                        # No change — inherit current tag
-                        db.update_shot_outfit_tag(shot_id, current_tag)
-                        if current_tag:
-                            shots_tagged += 1
-                    elif decision.change_type == "existing":
-                        char_current_tags[char_id] = decision.tag
-                        db.update_shot_outfit_tag(shot_id, decision.tag)
-                        shots_tagged += 1
-                    elif decision.change_type == "new":
-                        # Generate design prompt + create outfit record
-                        design_prompt = self._generate_outfit_prompt(
-                            char_name, decision.tag,
-                            decision.clothing_desc,
-                            decision.activation_condition,
-                        )
-                        db.create_character_outfit(
-                            character_id=char_id,
-                            tag=decision.tag,
-                            prompt=design_prompt,  # Ready for ImageGenerator
-                            image_path="",
-                            is_default=0,
-                            activation_condition=decision.activation_condition,
-                        )
-                        char_current_tags[char_id] = decision.tag
-                        db.update_shot_outfit_tag(shot_id, decision.tag)
-                        outfits_generated += 1
-                        shots_tagged += 1
+                    og, st = self._apply_outfit_decision(
+                        decision, char_id, shot_id,
+                        char_current_tags, db, char_name,
+                    )
+                    outfits_generated += og
+                    shots_tagged += st
 
             db.set_agent_status(self.agent_name, chapter_id, "done")
             db.log(self.agent_name, chapter_id, "completed", {
@@ -341,5 +365,6 @@ class OutfitManagerAgent(AgentInterface):
 
         except Exception as e:
             db.set_agent_status(self.agent_name, chapter_id, "failed")
-            db.log(self.agent_name, chapter_id, "failed", {"error": str(e)}, level="ERROR")
+            db.log(self.agent_name, chapter_id, "failed",
+                   {"error": str(e)}, level="ERROR")
             return AgentResult(success=False, error=str(e))
