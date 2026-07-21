@@ -18,12 +18,12 @@ from ..db.repository import Database
 
 
 class ImageGeneratorAgent(AgentInterface):
-    """Generates real images for character variants and scene cards via Doubao.
+    """Generates design sheet images for character outfits and scene multi-views.
 
     Input:  {"chapter_id": int, "script_id": int}
-    Output: {"images_generated": int, "variants_processed": int, "scenes_processed": int}
+    Output: {"images_generated": int, "outfits_processed": int, "scenes_processed": int}
 
-    Pipeline position: Step 3.5 — after SceneDesigner, before ShotVisualizer.
+    Pipeline position: after CharDesigner + SceneDesigner, before ShotVisualizer.
     Only runs when --with-images is passed.
     """
 
@@ -173,16 +173,16 @@ class ImageGeneratorAgent(AgentInterface):
         db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
 
         try:
-            # ── Load variant rows with pending three-view images ──
-            variant_rows = db.conn.execute(
-                """SELECT id, three_view_prompt, face_closeup_prompt, face_closeup_image
-                   FROM appearance_variant
-                   WHERE three_view_prompt != '' AND three_view_image = ''
-                   ORDER BY id"""
+            # ── Load outfits with pending images (prompt exists, image_path empty) ──
+            outfit_rows = db.conn.execute(
+                """SELECT id, prompt, character_id, tag
+                   FROM character_outfit
+                   WHERE prompt != '' AND (image_path = '' OR image_path IS NULL)
+                   ORDER BY is_default DESC, id"""
             ).fetchall()
-            variants = [dict(r) for r in variant_rows]
+            outfits = [dict(r) for r in outfit_rows]
 
-            # ── Load scene rows with pending multi-view images ──
+            # ── Load scenes with pending multi-view images (unchanged from old code) ──
             scene_rows = db.conn.execute(
                 """SELECT id, multi_view_prompt
                    FROM scene_card
@@ -191,39 +191,34 @@ class ImageGeneratorAgent(AgentInterface):
             ).fetchall()
             scenes = [dict(r) for r in scene_rows]
 
-            total_entities = len(variants) + len(scenes)
+            total_entities = len(outfits) + len(scenes)
             print(
                 f"  Image Generator: 开始生成图片 "
-                f"({total_entities} 实体: {len(variants)} 角色三视图, {len(scenes)} 场景多景别)..."
+                f"({total_entities} 实体: {len(outfits)} 角色设定图, {len(scenes)} 场景多景别)..."
             )
 
-            # ── Generate face closeup images first (for face-consistent three-view) ──
-            face_closeups: dict[int, str] = {}  # variant_id → face_closeup_image_path
-            for vi, variant in enumerate(variants):
-                vid = variant["id"]
-                face_cp_prompt = variant.get("face_closeup_prompt", "")
-                face_cp_image = variant.get("face_closeup_image", "")
-                if not face_cp_prompt:
+            # ── Generate character design sheet images (single call each, no face closeup) ──
+            outfits_processed = 0
+            for oi, outfit in enumerate(outfits):
+                tag_label = outfit.get("tag", "默认")
+                label = f"角色设定图 [{tag_label}] {oi+1}/{len(outfits)}"
+                print(f"    [{label}]")
+                prompt = outfit.get("prompt", "")
+                if not prompt:
                     continue
-                if face_cp_image and Path(face_cp_image).exists():
-                    face_closeups[vid] = face_cp_image
-                    print(f"    [脸部特写 #{vid}] 已存在，跳过生成")
-                    continue
-                # Generate face closeup
-                print(f"    [脸部特写 #{vid}] 生成中...")
                 try:
                     result = self.browser.generate_image(
-                        prompt=face_cp_prompt, aspect_ratio="16:9",
+                        prompt=prompt, aspect_ratio="16:9",
                     )
                     if result.success and result.file_paths:
                         chosen = result.file_paths[0]
                         if len(result.file_paths) > 1:
                             chosen = self._user_select_image(
-                                result.file_paths, "脸部特写", vid,
+                                result.file_paths, "角色设定图", outfit["id"],
                             )
                         if chosen:
-                            db.update_appearance_variant_face_closeup(vid, chosen)
-                            face_closeups[vid] = chosen
+                            db.update_outfit_image(outfit["id"], chosen)
+                            outfits_processed += 1
                             # Delete unchosen
                             for p in result.file_paths:
                                 if p != chosen:
@@ -231,33 +226,19 @@ class ImageGeneratorAgent(AgentInterface):
                                         Path(p).unlink(missing_ok=True)
                                     except Exception:
                                         pass
-                            print(f"    [脸部特写 #{vid}] ✓ 已保存")
+                            print(f"    [角色设定图 #{outfit['id']}] ✓ 已保存 {Path(chosen).name}")
                     else:
-                        print(f"    [脸部特写 #{vid}] ✗ 生成失败: {result.error}")
+                        print(f"    [角色设定图 #{outfit['id']}] ✗ 生成失败: {result.error}")
                 except Exception as e:
                     db.log(
                         self.agent_name, chapter_id,
-                        "face_closeup_error",
-                        {"variant_id": vid, "error": str(e)},
+                        "outfit_image_error",
+                        {"outfit_id": outfit["id"], "error": str(e)},
                         level="WARNING",
                     )
-                    print(f"    [脸部特写 #{vid}] ✗ 异常: {e}")
+                    print(f"    [角色设定图 #{outfit['id']}] ✗ 异常: {e}")
 
-            # ── Generate character three-view images (with face closeup reference) ──
-            variants_processed = 0
-            for vi, variant in enumerate(variants):
-                label = f"角色三视图 {vi+1}/{len(variants)}"
-                print(f"    [{label}]")
-                vid = variant["id"]
-                refs = [face_closeups[vid]] if vid in face_closeups else None
-                if self._process_entity(
-                    db, chapter_id, variant, "three_view_prompt",
-                    db.update_appearance_variant_three_view, "角色变体",
-                    reference_images=refs,
-                ):
-                    variants_processed += 1
-
-            # ── Generate scene multi-view images ──
+            # ── Generate scene multi-view images (unchanged) ──
             scenes_processed = 0
             for si, scene in enumerate(scenes):
                 label = f"场景多景别 {si+1}/{len(scenes)}"
@@ -268,44 +249,33 @@ class ImageGeneratorAgent(AgentInterface):
                 ):
                     scenes_processed += 1
 
-            images_generated = variants_processed + scenes_processed
-            had_pending_work = bool(variants) or bool(scenes)
+            images_generated = outfits_processed + scenes_processed
+            had_pending = bool(outfits) or bool(scenes)
 
             if images_generated > 0:
                 db.set_agent_status(self.agent_name, chapter_id, "done")
                 db.log(self.agent_name, chapter_id, "completed", {
                     "images_generated": images_generated,
-                    "variants_processed": variants_processed,
+                    "outfits_processed": outfits_processed,
                     "scenes_processed": scenes_processed,
                 })
                 return AgentResult(success=True, data={
                     "images_generated": images_generated,
-                    "variants_processed": variants_processed,
+                    "outfits_processed": outfits_processed,
                     "scenes_processed": scenes_processed,
                 })
-            elif had_pending_work:
+            elif had_pending:
                 db.set_agent_status(self.agent_name, chapter_id, "failed")
-                err_msg = (
-                    f"No images generated from {len(variants)} variants "
-                    f"and {len(scenes)} scenes"
-                )
+                err_msg = f"No images from {len(outfits)} outfits + {len(scenes)} scenes"
                 db.log(self.agent_name, chapter_id, "completed_all_failed",
                        {"reason": err_msg}, level="ERROR")
-                return AgentResult(success=False, error=err_msg, data={
-                    "images_generated": 0,
-                    "variants_processed": 0,
-                    "scenes_processed": 0,
-                })
+                return AgentResult(success=False, error=err_msg)
             else:
                 db.set_agent_status(self.agent_name, chapter_id, "done")
                 db.log(self.agent_name, chapter_id, "completed_nothing_pending",
-                       {"reason": "No pending three-view or multi-view images"},
-                       level="INFO")
-                return AgentResult(success=True, data={
-                    "images_generated": 0,
-                    "variants_processed": 0,
-                    "scenes_processed": 0,
-                })
+                       {"reason": "No pending outfit or scene images"}, level="INFO")
+                return AgentResult(success=True, data={"images_generated": 0})
+
         except Exception as e:
             db.set_agent_status(self.agent_name, chapter_id, "failed")
             db.log(self.agent_name, chapter_id, "failed", {"error": str(e)}, level="ERROR")
