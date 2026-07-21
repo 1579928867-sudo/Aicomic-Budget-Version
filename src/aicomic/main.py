@@ -102,6 +102,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
     from .doubao.client import MockVideoGenerator, DoubaoVideoGenerator
     from .agents.image_generator import ImageGeneratorAgent
     from .agents.shot_video_generator import ShotVideoGeneratorAgent
+    from .agents.outfit_manager import OutfitManagerAgent
     from .doubao.browser import DoubaoBrowserClient
     from .orchestrator import Orchestrator
 
@@ -147,6 +148,10 @@ def cmd_run(args: argparse.Namespace, config: dict):
         bus.register(char_designer)
         bus.register(scene_designer)
         bus.register(shot_visualizer)
+
+        # v0.9: Outfit Manager (runs after SceneDesigner, before ImageGenerator)
+        outfit_manager = OutfitManagerAgent(llm_client=llm)
+        bus.register(outfit_manager)
 
         with_images = getattr(args, "with_images", False)
         with_video = getattr(args, "with_video", False)
@@ -211,8 +216,8 @@ def cmd_run(args: argparse.Namespace, config: dict):
         orchestrator = Orchestrator(bus, db)
 
         # ── Run ──
-        pipeline_label = "v0.8"
-        steps = "Screenwriter → CharDesigner → SceneDesigner"
+        pipeline_label = "v0.9"
+        steps = "Screenwriter → CharDesigner → SceneDesigner → OutfitManager"
         steps += " → ImageGenerator" if with_images else ""
         steps += " → ShotVisualizer"
         if with_video:
@@ -231,7 +236,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
                 print(f"  Script ID: {result.data.get('script_id')}")
                 print(f"  Characters: {result.data.get('characters')}")
                 print(f"  Scenes: {result.data.get('scenes_list')}")
-                print(f"  Char variants created: {result.data.get('char_variants_created', 0)}")
+                print(f"  Outfits created: {result.data.get('outfits_created', 0)}")
                 print(f"  Scenes updated: {result.data.get('scenes_updated', 0)}")
                 if with_images:
                     print(f"  Images generated: {result.data.get('images_generated', 0)}")
