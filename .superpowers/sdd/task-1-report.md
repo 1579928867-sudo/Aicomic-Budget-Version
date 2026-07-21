@@ -1,62 +1,70 @@
-# Task 1 Report: DB Schema + Repository Methods (v0.7)
+# Task 1 Report: Database schema — character_outfit table + outfit_tag column
 
 ## Status: DONE
 
-## Commit
+## Commits
 
 ```
-7cb134b feat(db): add three_view / multi_view columns and update methods
+316a9afd0aaef44f5739598c22552ec4d6c89d4a feat(db): add character_outfit table + outfit_tag column for v0.9 outfit system
 ```
 
 ## Files Modified
 
 - `src/aicomic/db/repository.py`
 
-### Step 1 — Migration statements (lines 161–165 in final file)
+### Step 1 — `character_outfit` CREATE TABLE in `init_schema()`
 
-Added four v0.7 `ALTER TABLE` statements inside `migrate_schema()`:
+Added after `appearance_variant` block and before `scene_card`:
 
-- `ALTER TABLE appearance_variant ADD COLUMN three_view_prompt TEXT DEFAULT ''`
-- `ALTER TABLE appearance_variant ADD COLUMN three_view_image TEXT DEFAULT ''`
-- `ALTER TABLE scene_card ADD COLUMN multi_view_prompt TEXT DEFAULT ''`
-- `ALTER TABLE scene_card ADD COLUMN multi_view_image TEXT DEFAULT ''`
-
-### Step 2 — `update_scene_card_multi_view_prompt` (lines 347–353)
-
-Inserted after `update_scene_card()`. Accepts `scene_id: int` and `prompt: str`, updates `multi_view_prompt` on the matching `scene_card` row, then commits.
-
-### Step 3 — `update_appearance_variant_three_view_prompt` (lines 404–412)
-
-Inserted after `update_appearance_variant_views()`. Accepts `variant_id: int` and `prompt: str`, updates `three_view_prompt` on the matching `appearance_variant` row, then commits.
-
-### Step 4 — `update_appearance_variant_three_view` (lines 430–438)
-
-Inserted after `update_appearance_variant_image()`. Accepts `variant_id: int` and `file_path: str`, updates `three_view_image` on the matching `appearance_variant` row, then commits.
-
-### Step 5 — `update_scene_card_multi_view` (lines 456–462)
-
-Inserted after `update_scene_card_image()`. Accepts `scene_id: int` and `file_path: str`, updates `multi_view_image` on the matching `scene_card` row, then commits.
-
-## Test Results
-
-Command:
-
-```
-/c/Users/w/AppData/Local/Programs/Python/Python312/python.exe -c "from src.aicomic.db.repository import Database; from pathlib import Path; db = Database(Path('data/aicomic.db')); db.connect(); db.migrate_schema(); print('OK')"
+```sql
+CREATE TABLE IF NOT EXISTS character_outfit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER NOT NULL REFERENCES character_card(id),
+    tag TEXT NOT NULL,
+    prompt TEXT NOT NULL DEFAULT '',
+    image_path TEXT DEFAULT '',
+    is_default INTEGER DEFAULT 0,
+    activation_condition TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(character_id, tag)
+);
 ```
 
-**First run:** `OK`
-**Second run (idempotency check):** `OK`
+### Step 2 — Migrations in `migrate_schema()`
 
-No errors. All four new columns default to `''` as specified. Migrations are idempotent via the existing `try/except sqlite3.OperationalError: pass` pattern.
+Appended two v0.9 items to the migrations list:
+
+- `ALTER TABLE storyboard_shot ADD COLUMN outfit_tag TEXT DEFAULT NULL`
+- `CREATE TABLE IF NOT EXISTS character_outfit(...)` (idempotent via IF NOT EXISTS)
+
+## Test Verification
+
+**Command:**
+```bash
+C:/Users/w/AppData/Local/Programs/Python/Python312/python.exe -c "
+from pathlib import Path
+import sys; sys.path.insert(0, 'src')
+from aicomic.db.repository import Database
+db = Database(Path('data/aicomic.db'))
+db.connect()
+db.init_schema()
+db.migrate_schema()
+tables = db.conn.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()
+print([t['name'] for t in tables])
+cols = [c['name'] for c in db.conn.execute('PRAGMA table_info(storyboard_shot)')]
+print('outfit_tag' in cols)
+db.close()
+"
+```
+
+**Output:**
+```
+['novel', 'sqlite_sequence', 'chapter', 'script', 'storyboard_shot', 'character_card', 'appearance_variant', 'scene_card', 'video_clip', 'final_video', 'task_log', 'character_outfit']
+True
+```
+
+**Result:** PASS — `character_outfit` in table list, `outfit_tag` column present (`True`).
 
 ## Concerns
 
-None. The implementation matches the brief exactly, follows existing code conventions, and all tests pass.
-
-## Self-review notes
-
-- All four new methods follow the naming convention of existing methods (`update_{table}_{column}`).
-- All four methods use parameterized binding (`?` placeholders) consistent with the rest of the file.
-- None of the new methods introduce validation whitelists — the brief did not specify any (the columns are fixed, not dynamic view names).
-- No existing code was modified; only new code was added (41 insertions).
+None. Implementation matches the brief exactly, follows existing code conventions, and verification passes.

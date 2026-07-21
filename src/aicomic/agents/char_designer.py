@@ -75,6 +75,13 @@ class CharacterDesignerAgent(AgentInterface):
 
     agent_name = "char-designer"
 
+    # Modified prompt for outfit variant generation — allows clothing swaps
+    # while keeping face/body/props identical.
+    VARIANT_SYSTEM_PROMPT = CHAR_DESIGNER_SYSTEM_PROMPT.replace(
+        "**No variants** — each character gets exactly ONE design_prompt (their default/default look).",
+        "**Outfit variant mode** — generate a variant design_prompt that swaps ONLY the clothing description. Keep face shape, hairstyle, body type, equipment/artifacts, and all non-clothing details IDENTICAL to the default design. Only the clothing changes.",
+    )
+
     def __init__(self, llm_client: Any):
         self.llm = llm_client
 
@@ -220,7 +227,7 @@ class CharacterDesignerAgent(AgentInterface):
             )
 
             result = self.llm.generate_json(
-                system_prompt=CHAR_DESIGNER_SYSTEM_PROMPT,
+                system_prompt=self.VARIANT_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
             design_prompt = result.get("design_prompt", "")
@@ -240,5 +247,8 @@ class CharacterDesignerAgent(AgentInterface):
                 activation_condition=activation_condition,
             )
             return outfit_id
-        except Exception:
+        except Exception as e:
+            db.log(self.agent_name, "generate_outfit_variant", "failed",
+                   {"error": str(e), "character": character_name, "tag": tag},
+                   level="ERROR")
             return None
