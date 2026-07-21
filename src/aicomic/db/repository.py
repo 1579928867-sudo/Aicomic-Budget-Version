@@ -99,6 +99,18 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS character_outfit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                character_id INTEGER NOT NULL REFERENCES character_card(id),
+                tag TEXT NOT NULL,
+                prompt TEXT NOT NULL DEFAULT '',
+                image_path TEXT DEFAULT '',
+                is_default INTEGER DEFAULT 0,
+                activation_condition TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(character_id, tag)
+            );
+
             CREATE TABLE IF NOT EXISTS scene_card (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -166,6 +178,20 @@ class Database:
             # v0.8: face closeup for face-consistent three-view generation
             "ALTER TABLE appearance_variant ADD COLUMN face_closeup_prompt TEXT DEFAULT ''",
             "ALTER TABLE appearance_variant ADD COLUMN face_closeup_image TEXT DEFAULT ''",
+            # v0.9: outfit_tag for character outfit system
+            "ALTER TABLE storyboard_shot ADD COLUMN outfit_tag TEXT DEFAULT NULL",
+            # v0.9: character_outfit table (IF NOT EXISTS handled by init_schema)
+            "CREATE TABLE IF NOT EXISTS character_outfit ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "character_id INTEGER NOT NULL REFERENCES character_card(id),"
+            "tag TEXT NOT NULL,"
+            "prompt TEXT NOT NULL DEFAULT '',"
+            "image_path TEXT DEFAULT '',"
+            "is_default INTEGER DEFAULT 0,"
+            "activation_condition TEXT DEFAULT '',"
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+            "UNIQUE(character_id, tag)"
+            ")",
         ]
         for sql in migrations:
             try:
