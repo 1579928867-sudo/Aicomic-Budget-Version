@@ -16,6 +16,7 @@ from typing import Any
 
 from ..interface import AgentInterface, AgentResult
 from ..db.repository import Database
+from .prompt_utils import normalize_prompt_terms
 
 
 class ImageGeneratorAgent(AgentInterface):
@@ -30,11 +31,15 @@ class ImageGeneratorAgent(AgentInterface):
 
     agent_name = "image-generator"
 
-    def __init__(self, browser_client: "DoubaoBrowserClient") -> None:
+    def __init__(self, browser_client: "DoubaoBrowserClient",
+                 interactive: bool = False) -> None:
         """Args:
             browser_client: DoubaoBrowserClient instance (shared across agents).
+            interactive: If True, open candidates with system viewer and prompt
+                         user to pick one. Default False — auto-selects first.
         """
         self.browser = browser_client
+        self.interactive = interactive
 
     def validate_input(self, input_data: dict[str, Any]) -> bool:
         return (
@@ -51,6 +56,8 @@ class ImageGeneratorAgent(AgentInterface):
         update_fn: Any,
         entity_type: str,
         reference_images: list[str] | None = None,
+        *,
+        aspect_ratio: str = "16:9",
     ) -> bool:
         """Generate and save an image for one entity. Returns True if an image was saved.
 
@@ -64,7 +71,7 @@ class ImageGeneratorAgent(AgentInterface):
         print(f"    [{entity_type} #{entity['id']}]{ref_label} 生成中...")
         try:
             result = self.browser.generate_image(
-                prompt=prompt, aspect_ratio="16:9",
+                prompt=normalize_prompt_terms(prompt), aspect_ratio=aspect_ratio,
                 reference_images=reference_images,
             )
             if not result.success or not result.file_paths:
@@ -114,10 +121,13 @@ class ImageGeneratorAgent(AgentInterface):
     def _user_select_image(
         self, paths: list[str], entity_type: str, entity_id: int
     ) -> str | None:
-        """Open all candidate images with system viewer, prompt user to pick one.
+        """Auto-select first candidate (interactive=False) or prompt user.
 
         Returns the chosen path, or None if user cancels.
         """
+        if not self.interactive:
+            return paths[0]
+
         print(f"\n  📷 {entity_type} #{entity_id} — 豆包生成了 {len(paths)} 张候选图：")
         for i, p in enumerate(paths):
             print(f"    [{i+1}] {Path(p).name}")
@@ -204,7 +214,7 @@ class ImageGeneratorAgent(AgentInterface):
                     continue
                 try:
                     result = self.browser.generate_image(
-                        prompt=prompt, aspect_ratio="16:9",
+                        prompt=normalize_prompt_terms(prompt), aspect_ratio="16:9",
                     )
                     if result.success and result.file_paths:
                         chosen = result.file_paths[0]
@@ -234,7 +244,7 @@ class ImageGeneratorAgent(AgentInterface):
                     )
                     print(f"    [角色设定图 #{outfit['id']}] ✗ 异常: {e}")
 
-            # ── Generate scene multi-view images (unchanged) ──
+            # ── Generate scene multi-view images (9:16 portrait for triptych) ──
             scenes_processed = 0
             for si, scene in enumerate(scenes):
                 label = f"场景多景别 {si+1}/{len(scenes)}"
@@ -242,6 +252,7 @@ class ImageGeneratorAgent(AgentInterface):
                 if self._process_entity(
                     db, chapter_id, scene, "multi_view_prompt",
                     db.update_scene_card_multi_view, "场景",
+                    aspect_ratio="9:16",
                 ):
                     scenes_processed += 1
 

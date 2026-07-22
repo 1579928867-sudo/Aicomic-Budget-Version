@@ -1,163 +1,145 @@
-"""Screenwriter Agent — converts chapter text into a storyboard script via Claude."""
+"""Storyboard Agent — designs camera shots from a structured drama script.
 
+v0.10: Refactored from "novel→storyboard" to "script→storyboard".
+Takes a ScriptwriterAgent output (script with beats, dialogue, expressions,
+sound cues) and designs merged camera shots (≤10s each, 5-8 total).
+"""
+
+import json
 from typing import Any
 
 from ..interface import AgentInterface, AgentResult
 from ..db.repository import Database
 
-SCREENWRITER_SYSTEM_PROMPT = """You are a professional comic/drama scriptwriter and director specializing in adapting novel chapters into storyboard scripts for AI-generated vertical short-drama (竖屏漫剧). You must follow strict industry standards for shot composition, pacing, and visual storytelling.
+STORYBOARD_SYSTEM_PROMPT = """You are a professional storyboard director (分镜导演) for Chinese short-drama (竖屏漫剧) production. Your input is a complete drama script with fine-grained beats (each beat = one micro-action or one line of dialogue). Your output is a set of merged camera shots.
 
-Your task: Convert the given novel chapter into a structured JSON script with storyboard shots optimized for vertical video.
+## Core Task
 
-## Core Principles (MUST follow)
+Read the script's beats. Merge adjacent same-scene beats into camera shots (5-8 shots total per chapter, each ≤10s). Design camera movement, shot type, and visual narration for each merged shot.
 
-1. **Absolute fidelity to original text**: Do NOT add, delete, or rewrite any words, sentences, or paragraphs. Character dialogue must be preserved exactly as written.
-2. **Visualize everything**: All information (background, psychology, worldbuilding, relationships) MUST be converted to visible actions, expressions, environmental changes, or character dialogue. NO narration/voiceover for exposition — narration is ONLY for describing what the viewer sees happening on screen.
-3. **Psychological descriptions → actions**: "He was furious" → action like "攥紧拳头，指节发白". "She realized..." → expression change like "眼神一凝，若有所悟".
-4. **Worldbuilding → visual/dialogue**: Exposition like "他是无命人" must become dialogue from another character or a visual detail, never a narration text dump.
+## Shot Merging Rules (CRITICAL)
 
-## Shot Count & Density Rules
+1. **Merge adjacent same-scene beats**: Beats in the same scene (same scene_name) with related characters and connectable action should be merged into ONE shot.
+2. **Duration cap**: Each merged shot MUST be ≤10s. Assign realistic durations:
+   - Pure action beat: 1-3s depending on complexity
+   - Pure dialogue: 1s per 3 Chinese characters
+   - If merging would exceed 10s, split into two shots.
+3. **Camera transitions**: When merging beats with different ideal camera distances, use "→" notation:
+   - "CU→MS": start close-up, pull back to medium shot
+   - "Push→ECU": push in from push to extreme close-up
+   - "LS→FT": start wide, then follow character
+   Single-camera shots just use one value (e.g. "CU", "MS").
+4. **No ≤2s orphan shots**: Any resulting shot ≤2s must be merged into an adjacent shot. Minimum shot duration is 2.5s.
+5. **Total shots**: 5-8 shots for the entire chapter. NOT 10+.
 
-5. **Total shot count**: A typical novel chapter (~3000-5000 characters) should produce **8-15 shots maximum**. Do NOT create a shot for every single gesture or line of dialogue. Each shot should cover a meaningful narrative "beat" — a complete micro-action or a short dialogue exchange. Combine adjacent actions into one shot when they happen in the same location with the same characters.
-6. **Merge rule**: Adjacent actions by the same character in the same scene should be ONE shot unless a camera change is essential for dramatic effect. "He walked in, looked around, and sat down" = ONE shot, not three.
-7. **Dialogue batching**: 2-4 lines of back-and-forth dialogue in the same scene can be a SINGLE shot ("both" type) rather than separate shots, as long as total duration ≤10s.
-8. **Skip trivial actions**: Minor gestures (blink, slight nod, finger tap) do not need dedicated shots — fold them into the narration of the next meaningful action shot.
-9. Each shot duration MUST be ≤10 seconds and ≥1 second.
+## Camera Types
 
-## Shot Rhythm Rules
+Use these EXACT values (single or combined with "→"):
 
-10. **Action/Dialogue alternation**: NEVER have 5+ consecutive seconds of pure dialogue without an action shot between them. NEVER have 10+ consecutive seconds of pure action without dialogue.
-11. **Camera change every 3-5 seconds**: Vertical short-drama demands fast visual pacing. Same camera type must not repeat more than twice in a row.
+| Value | Description |
+|-------|-------------|
+| "LS" | Long Shot — full body, environment dominant |
+| "MS" | Medium Shot — knees up, balanced |
+| "CU" | Close-Up — chest up, expression focus |
+| "ECU" | Extreme Close-Up — local detail (hands, eyes, props) |
+| "HA" | High Angle — looking down |
+| "LA" | Low Angle — looking up |
+| "OTS" | Over-the-Shoulder — dialogue confrontations |
+| "FT" | Follow Tracking — character movement |
+| "Pan" | Panning — horizontal sweep |
+| "Push" | Push In — camera pushes forward |
 
-## Duration Guidelines
+**Examples of valid camera_movement values:**
+- "CU" (single camera)
+- "CU→MS" (start CU, pull to MS)
+- "LS→FT→CU" (establishing → follow → close-up)
 
-**Dialogue duration** (~3 chars/sec for Chinese):
-| Characters | Duration |
-|------------|----------|
-| 1-5 chars | 1s |
-| 6-12 chars | 1.5-2s |
-| 13-20 chars | 2.5-3s |
-| 21-35 chars | 3.5-5s |
-| >35 chars | Split into multiple dialogue shots |
+## Narration (visual description)
 
-**Action duration**:
-| Type | Examples | Duration |
-|------|----------|----------|
-| Minimal | blink, eyebrow raise, finger twitch | 0.5-1s |
-| Simple | look up, turn around, reach out, sigh | 1-2s |
-| Medium | stand up, wipe surface, slam table, kneel | 2-3s |
-| Complex | 3-move fight sequence, crowd reaction sweep | 3-4s |
-| Environment | sunlight through window, lamps lighting up, establishing shot | 3-5s |
+The `narration` field describes what the viewer sees throughout the merged shot. Compose it by joining beat actions in time order:
+- "萧澈缓缓睁开眼睛，眼神茫然。随后他快速坐起，环顾四周，发现自己躺在一张挂着红色幔帐的大床上。"
+- Include expressions from the script: "...眼神茫然..." "...满脸喜色..."
+- Do NOT repeat dialogue in narration — dialogue goes in the `dialogue` field.
 
-## Camera Types (10 types for vertical short-drama)
+## Dialogue
 
-Use these EXACT values for camera_movement:
-
-| Value | EN | Description | Best for |
-|-------|----|-------------|----------|
-| "LS" | Long Shot | Full body ~1/3-1/2 of frame, environment dominant | Opening establishing shots, crowd scenes |
-| "MS" | Medium Shot | Knees up, balances action and expression | Daily dialogue, walking, physical interaction |
-| "CU" | Close-Up | Chest up, emphasizes expression and emotion | Dialogue reactions, sneering, frowns |
-| "ECU" | Extreme Close-Up | Local detail (hands, eyes, props) | Key props, action details |
-| "HA" | High Angle | Shooting down, compressing space | Character crouching, kneeling, showing vulnerability |
-| "LA" | Low Angle | Shooting up, emphasizing height/power | Authoritative figures, tall structures |
-| "OTS" | Over-the-Shoulder | Over one character's shoulder to another | Dialogue confrontations |
-| "FT" | Follow Tracking | Camera follows character movement | Character walking/moving |
-| "Pan" | Panning | Camera sweeps horizontally | Scanning crowd reactions, environment |
-| "Push" | Push In | Camera slowly pushes forward | Building tension, emotional emphasis |
+Merge dialogue lines from all beats in the shot. Format: "Name: 内容" separated by newlines.
+- Include emotion hints from the script: "萧澈（困惑）: 小姑妈？"
+- If no dialogue in the merged shot, use empty string "".
 
 ## Shot Type
 
-Each shot must have a shot_type field:
-- "action": Pure visual action, no dialogue spoken
-- "dialogue": Pure character speech
-- "both": Action and dialogue happening simultaneously
+- "action": no dialogue
+- "dialogue": pure speech
+- "both": action + dialogue simultaneously
+
+## Characters
+
+List every character appearing in this shot. Use "default" variant unless the script indicates outfit changes.
 
 ## Output Format
 
-Return ONLY valid JSON in this exact structure (no other text):
+Return ONLY valid JSON:
 
 {
-  "era_background": "中国古代·仙侠",
   "scenes": [
     {
-      "scene_name": "大殿",
+      "scene_name": "婚房",
       "scene_index": 1,
       "shots": [
         {
           "shot_num": 1,
-          "shot_type": "action",
-          "duration_sec": 4.0,
-          "characters": [
-            {"name": "张三", "variant": "default"}
-          ],
-          "scene_name": "大殿",
-          "narration": "张三缓步走入大殿，环顾四周，目光落在正前方的宝座上。",
-          "dialogue": "",
-          "camera_movement": "LS"
-        },
-        {
-          "shot_num": 2,
           "shot_type": "both",
-          "duration_sec": 3.0,
-          "characters": [
-            {"name": "张三", "variant": "default"},
-            {"name": "李四", "variant": "default"}
-          ],
-          "scene_name": "大殿",
-          "narration": "张三走到殿中停下脚步。",
-          "dialogue": "张三: 终于到了。",
-          "camera_movement": "MS"
+          "duration_sec": 8.0,
+          "characters": [{"name": "萧澈", "variant": "default"}],
+          "scene_name": "婚房",
+          "narration": "萧澈缓缓睁开眼睛，眼神茫然，快速坐起环顾四周。红色幔帐飘动，暖黄晨光洒入房间。",
+          "dialogue": "萧澈（困惑）: 这...这是哪里？",
+          "camera_movement": "CU→MS"
         }
       ]
     }
   ],
-  "characters": ["张三", "李四"],
-  "scenes_list": ["大殿"]
+  "characters": ["萧澈"],
+  "scenes_list": ["婚房"]
 }
 
 ## Field Requirements
 
-- **era_background**: Detect the story's era setting. MUST be one of: "中国古代·仙侠", "中国古代·武侠", "中国古代·宫廷", "中国现代·都市", "中国现代·校园", "民国", "西方奇幻", "科幻未来", "架空世界". Use the most specific match.
-- **shot_num**: Globally sequential across ALL scenes (1, 2, 3, ... N).
-- **shot_type**: One of "action", "dialogue", "both".
-- **characters**: Array of {"name": "...", "variant": "..."} for every character appearing in this shot. Use "default" for the character's current chapter appearance. Only use a non-default variant name when the SAME character appears with MULTIPLE distinct looks within this chapter (e.g., first half in regular clothes, later in "夜行衣"; first healthy then "受伤后"). Do NOT use variant to describe the character's sole outfit — if they only wear one thing this chapter, that IS "default".
-- **narration**: Visual description of what the viewer sees. Can be empty string if shot is pure dialogue.
-- **dialogue**: Character speech in "Name: 内容" format. Can be empty string if shot is pure action.
-- **camera_movement**: MUST be one of the 10 camera type values listed above.
-- **characters** (top-level): List of ALL unique character names in the entire chapter.
-- **scenes_list**: List of ALL distinct scene/location names in the order they appear."""
+- **shot_num**: Globally sequential (1, 2, 3, ... N).
+- **shot_type**: "action", "dialogue", or "both".
+- **duration_sec**: 2.5–10.0 seconds. Sum of merged beat durations.
+- **camera_movement**: Single value or "→" separated sequence.
+- **narration**: Complete visual description of the merged shot. Include expressions, atmosphere.
+- **dialogue**: Merged dialogue lines, or empty string.
+- **scene_name**: MUST match the script's scene_name exactly.
+"""
 
 
 class ScreenwriterAgent(AgentInterface):
-    """Converts chapter text into a storyboard script using Claude.
+    """Designs camera shots from a structured drama script (v0.10 StoryboardAgent).
 
-    Input:  {"chapter_id": int, "raw_text": str}
-    Output: {"script_id": int, "characters": list[str], "scenes_list": list[str]}
+    Input:  {"chapter_id": int, "script_id": int}
+            Reads the script (ScriptwriterAgent output) from DB via script_id.
+    Output: {"shots_created": int, "total_shots": int}
+
+    Saves storyboard shots to the DB (same format as before v0.10).
     """
 
-    agent_name = "screenwriter"
+    agent_name = "storyboard-agent"
 
     def __init__(self, llm_client: Any):
-        """Initialize with a ClaudeClient-compatible LLM client.
-
-        Args:
-            llm_client: An object with a generate_json(system_prompt, user_prompt, max_tokens) method.
-        """
         self.llm = llm_client
 
     def validate_input(self, input_data: dict[str, Any]) -> bool:
         return (
             isinstance(input_data.get("chapter_id"), int)
-            and isinstance(input_data.get("raw_text"), str)
-            and len(input_data["raw_text"]) > 0
+            and isinstance(input_data.get("script_id"), int)
         )
 
-    def execute(
-        self, input_data: dict[str, Any], db: Database
-    ) -> AgentResult:
+    def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
         chapter_id = input_data["chapter_id"]
-        raw_text = input_data["raw_text"]
+        script_id = input_data["script_id"]
 
         # ── Idempotency check ──
         existing_status = db.get_agent_status(self.agent_name, chapter_id)
@@ -165,49 +147,48 @@ class ScreenwriterAgent(AgentInterface):
             db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
             return AgentResult(success=True, data={"status": "skipped"})
 
-        # ── Mark running ──
         db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"chapter_id": chapter_id})
+        db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
 
         try:
-            # ── Call LLM (needs high max_tokens — full chapter JSON is large) ──
-            script_json = self.llm.generate_json(
-                system_prompt=SCREENWRITER_SYSTEM_PROMPT,
-                user_prompt=(
-                    f"请将以下小说章节改编为分镜剧本（JSON 格式）。"
-                    f"注意：整章控制在 8-15 个镜头以内，合并相邻的同类动作和对白。\n\n"
-                    f"{raw_text}"
-                ),
-                max_tokens=16384,
+            # ── Load the script from DB ──
+            script_rows = db.conn.execute(
+                "SELECT raw_json FROM script WHERE id = ?", (script_id,)
+            ).fetchone()
+            if not script_rows:
+                raise ValueError(f"Script not found for id={script_id}")
+            script_json = json.loads(script_rows["raw_json"])
+
+            # ── Build user prompt from script beats ──
+            user_prompt = self._build_user_prompt(script_json)
+
+            # ── Call LLM ──
+            storyboard_json = self.llm.generate_json(
+                system_prompt=STORYBOARD_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                max_tokens=8192,
             )
 
-            # ── Validate script structure ──
-            self._validate_script_structure(script_json)
+            # ── Validate structure ──
+            self._validate_storyboard(storyboard_json)
 
-            # ── Save script ──
-            script_id = db.save_script(chapter_id, script_json)
-
-            # ── Register characters ──
+            # ── Register characters (may already exist, idempotent) ──
             char_name_to_id: dict[str, int] = {}
-            characters = script_json.get("characters", [])
-            if not characters:
-                raise ValueError("Script JSON missing 'characters' list")
+            characters = storyboard_json.get("characters", [])
             for name in characters:
                 char_id, _ = db.get_or_create_character(name)
                 char_name_to_id[name] = char_id
 
-            # ── Register scenes ──
+            # ── Register scenes (may already exist) ──
             scene_name_to_id: dict[str, int] = {}
-            scenes_list = script_json.get("scenes_list", [])
-            if not scenes_list:
-                raise ValueError("Script JSON missing 'scenes_list'")
+            scenes_list = storyboard_json.get("scenes_list", [])
             for name in scenes_list:
                 scene_id = db.get_or_create_scene(name)
                 scene_name_to_id[name] = scene_id
 
             # ── Flatten & save storyboard shots ──
             shots_flat: list[dict] = []
-            for scene in script_json.get("scenes", []):
+            for scene in storyboard_json.get("scenes", []):
                 scene_name = scene.get("scene_name", "")
                 scene_id = scene_name_to_id.get(scene_name)
                 for shot in scene.get("shots", []):
@@ -221,7 +202,7 @@ class ScreenwriterAgent(AgentInterface):
                         "shot_num": shot["shot_num"],
                         "narration": shot.get("narration", ""),
                         "dialogue": shot.get("dialogue", ""),
-                        "camera_movement": shot.get("camera_movement", "static"),
+                        "camera_movement": shot.get("camera_movement", "MS"),
                         "duration_sec": shot.get("duration_sec", 8.0),
                         "char_ids": char_ids,
                         "scene_id": scene_id,
@@ -229,7 +210,6 @@ class ScreenwriterAgent(AgentInterface):
 
             db.save_storyboard_shots(script_id, shots_flat)
 
-            # ── Mark done ──
             db.set_agent_status(self.agent_name, chapter_id, "done")
             db.log(
                 self.agent_name, chapter_id, "completed",
@@ -244,43 +224,99 @@ class ScreenwriterAgent(AgentInterface):
             return AgentResult(
                 success=True,
                 data={
-                    "script_id": script_id,
-                    "characters": characters,
-                    "scenes_list": scenes_list,
+                    "shots_created": len(shots_flat),
+                    "total_shots": len(shots_flat),
                 },
             )
 
         except Exception as e:
             db.set_agent_status(self.agent_name, chapter_id, "failed")
-            db.log(self.agent_name, chapter_id, "failed", {"error": str(e)}, level="ERROR")
+            db.log(
+                self.agent_name, chapter_id, "failed",
+                {"error": str(e)}, level="ERROR",
+            )
             return AgentResult(success=False, error=str(e))
 
+    def _build_user_prompt(self, script_json: dict) -> str:
+        """Build the LLM user prompt from script beats."""
+        parts = []
+        parts.append("## 剧本\n")
+        parts.append(f"时代背景: {script_json.get('era_background', '中国古代·仙侠')}")
+
+        for scene in script_json.get("scenes", []):
+            sn = scene.get("scene_name", "?")
+            atm = scene.get("atmosphere", "")
+            parts.append(f"\n### 场景: {sn}")
+            parts.append(f"氛围: {atm}")
+            parts.append(f"环境音: {scene.get('scene_sound_cues', [])}")
+
+            beats = scene.get("beats", [])
+            parts.append(f"Beats ({len(beats)}个):")
+            for b in beats:
+                bn = b.get("beat_num", "?")
+                action = b.get("action", "")
+                dialogue = b.get("dialogue", [])
+                expr = b.get("expressions", {})
+                sound = b.get("sound_cue", "")
+
+                parts.append(f"  Beat {bn}: {action}")
+                if dialogue:
+                    for d in dialogue:
+                        parts.append(
+                            f"    💬 {d.get('speaker','?')}"
+                            f"（{d.get('emotion','')}）: {d.get('line','')}"
+                        )
+                if expr:
+                    for char, exp in expr.items():
+                        parts.append(f"    🎭 {char}: {exp}")
+                if sound:
+                    parts.append(f"    🔊 {sound}")
+
+        parts.append(
+            "\n请将以上剧本 beats 合并为 5-8 个分镜镜头（每个 ≤10s），"
+            "同场景相邻 beats 合并在一起。"
+        )
+        return "\n".join(parts)
+
     @staticmethod
-    def _validate_script_structure(script: dict):
-        """Raise ValueError if the script JSON is missing required fields."""
+    def _validate_storyboard(script: dict):
+        """Raise ValueError if the storyboard JSON is missing required fields."""
         if not isinstance(script, dict):
-            raise ValueError("Script JSON must be a dict")
-        if "scenes" not in script:
-            raise ValueError("Script JSON missing 'scenes'")
-        if "characters" not in script:
-            raise ValueError("Script JSON missing 'characters'")
-        if "scenes_list" not in script:
-            raise ValueError("Script JSON missing 'scenes_list'")
-        # Validate camera_movement values in shots
-        valid_cameras = {"LS", "MS", "CU", "ECU", "HA", "LA", "OTS", "FT", "Pan", "Push",
-                         "static", "slow_push_in", "slow_pan", "slow_zoom"}
+            raise ValueError("Storyboard JSON must be a dict")
+        for field in ("scenes", "characters", "scenes_list"):
+            if field not in script:
+                raise ValueError(f"Storyboard JSON missing '{field}'")
+
+        # Validate shots — camera_movement now accepts "→" sequences
+        valid_cameras = {
+            "LS", "MS", "CU", "ECU", "HA", "LA", "OTS", "FT", "Pan", "Push",
+            "Pull", "Zoom",
+            "static",
+        }
         valid_shot_types = {"action", "dialogue", "both"}
+
         for scene in script.get("scenes", []):
             for shot in scene.get("shots", []):
+                # Check camera_movement: split on "→", "->", or similar arrow chars
+                # (LLMs occasionally use different arrow variants or encoding)
                 cam = shot.get("camera_movement", "")
-                if cam not in valid_cameras:
-                    raise ValueError(
-                        f"Invalid camera_movement '{cam}' in shot {shot.get('shot_num', '?')}. "
-                        f"Must be one of: {sorted(valid_cameras)}"
-                    )
+                import re
+                segments = re.split(r"\s*[-–—→⇒➔>]+\s*", cam)
+                for seg in segments:
+                    seg = seg.strip()
+                    if seg and seg not in valid_cameras:
+                        raise ValueError(
+                            f"Invalid camera '{seg}' in shot "
+                            f"{shot.get('shot_num', '?')} (full: '{cam}')"
+                        )
                 st = shot.get("shot_type", "")
                 if st not in valid_shot_types:
                     raise ValueError(
-                        f"Invalid shot_type '{st}' in shot {shot.get('shot_num', '?')}. "
-                        f"Must be one of: {sorted(valid_shot_types)}"
+                        f"Invalid shot_type '{st}' in shot {shot.get('shot_num', '?')}"
+                    )
+                dur = shot.get("duration_sec", 0)
+                if dur < 1 or dur > 10:
+                    raise ValueError(
+                        f"Shot {shot.get('shot_num', '?')} duration {dur}s "
+                        f"out of range (1-10s)"
                     )

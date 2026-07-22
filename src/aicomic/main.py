@@ -91,8 +91,15 @@ def _build_llm_client(backend: str, config: dict):
 
 def cmd_run(args: argparse.Namespace, config: dict):
     """Handle the 'run' subcommand."""
+    # Ensure UTF-8 output on Windows (avoids UnicodeEncodeError with ✓✗⚠⏭)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     from .db.repository import Database
     from .bus import AgentBus
+    from .agents.scriptwriter import ScriptwriterAgent
     from .agents.screenwriter import ScreenwriterAgent
     from .agents.char_designer import CharacterDesignerAgent
     from .agents.scene_designer import SceneDesignerAgent
@@ -127,24 +134,38 @@ def cmd_run(args: argparse.Namespace, config: dict):
     db.migrate_schema()
 
     try:
-        # ── Scaffold novel + chapter in DB ──
-        novel_id = db.create_novel(
-            title=chapter_file.stem,
-            author="",
-        )
-        chapter_id = db.create_chapter(novel_id, 1, raw_text)
-
-        print(f"Novel created (id={novel_id}), Chapter created (id={chapter_id})")
+        # ── Scaffold novel + chapter in DB (find-or-create, supports resume) ──
+        novel_title = chapter_file.stem
+        existing_novel = db.get_novel_by_title(novel_title)
+        if existing_novel:
+            novel_id = existing_novel["id"]
+            existing_chapter = db.get_chapter_by_num(novel_id, 1)
+            if existing_chapter:
+                chapter_id = existing_chapter["id"]
+                print(f"📋 续跑: Novel (id={novel_id}), Chapter (id={chapter_id})")
+            else:
+                chapter_id = db.create_chapter(novel_id, 1, raw_text)
+                print(f"Novel 已有 (id={novel_id}), Chapter created (id={chapter_id})")
+        else:
+            novel_id = db.create_novel(title=novel_title, author="")
+            chapter_id = db.create_chapter(novel_id, 1, raw_text)
+            print(f"Novel created (id={novel_id}), Chapter created (id={chapter_id})")
 
         # ── Wire up agents ──
         llm = _build_llm_client(backend, config)
-        screenwriter = ScreenwriterAgent(llm_client=llm)
+
+        # v0.10: Scriptwriter (novel → structured script with beats/dialogue/expressions/sound)
+        scriptwriter = ScriptwriterAgent(llm_client=llm)
+        # v0.10: Storyboard Agent (script beats → merged camera shots ≤10s)
+        storyboard_agent = ScreenwriterAgent(llm_client=llm)
+
         char_designer = CharacterDesignerAgent(llm_client=llm)
         scene_designer = SceneDesignerAgent(llm_client=llm)
         shot_visualizer = ShotVisualizerAgent(llm_client=llm)
 
         bus = AgentBus()
-        bus.register(screenwriter)
+        bus.register(scriptwriter)
+        bus.register(storyboard_agent)
         bus.register(char_designer)
         bus.register(scene_designer)
         bus.register(shot_visualizer)
@@ -216,8 +237,8 @@ def cmd_run(args: argparse.Namespace, config: dict):
         orchestrator = Orchestrator(bus, db)
 
         # ── Run ──
-        pipeline_label = "v0.9"
-        steps = "Screenwriter → CharDesigner → SceneDesigner → OutfitManager"
+        pipeline_label = "v0.10"
+        steps = "Scriptwriter → CharDesigner → SceneDesigner → OutfitManager → StoryboardAgent"
         steps += " → ImageGenerator" if with_images else ""
         steps += " → ShotVisualizer"
         if with_video:

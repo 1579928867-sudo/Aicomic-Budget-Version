@@ -3,9 +3,16 @@
 Manages a single Playwright Chromium instance, injects cookies, and provides
 generate_image() and generate_video() methods that automate the Doubao web UI.
 """
-
+import sys
 import time
 import uuid
+
+# Fix GBK encoding errors for emoji characters on Windows Chinese consoles
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -156,9 +163,26 @@ class DoubaoBrowserClient:
 
         Uses storageState (full browser profile) so session cookies survive
         across runs. Falls back to legacy cookie injection if no state file exists.
+
+        Includes crash recovery: if the browser or context was closed externally
+        (e.g. user manually closed the window), the stale references are cleared
+        and a fresh browser is launched.
         """
-        if self._browser is not None:
-            return
+        if self._browser is not None and self._context is not None:
+            try:
+                # Health check — accessing .pages fails if context is dead
+                self._context.pages
+                return
+            except Exception:
+                print("    [Browser] ⚠ 检测到浏览器已关闭，正在重建...")
+                self._browser = None
+                self._context = None
+                if self._playwright:
+                    try:
+                        self._playwright.stop()
+                    except Exception:
+                        pass
+                    self._playwright = None
 
         from playwright.sync_api import sync_playwright
 
@@ -561,11 +585,19 @@ class DoubaoBrowserClient:
         """Generate a video from reference images + prompt via Doubao image page.
 
         Reuses the text-to-image page (create-image), pasting reference images
-        and a "生成视频，5s，..." prompt. Doubao detects the video prefix and
+        and a "生成视频，Xs，..." prompt. Doubao detects the video prefix and
         switches to its video generation model (Seedance), returning an mp4.
 
+        Download strategy (v0.10):
+          1. Register Playwright download listener BEFORE clicking send
+          2. Poll for video/player element (not just http-src <video>)
+          3. If a download event was captured → save it
+          4. Else, find & click a "下载" button → catch download event
+          5. Else, extract video blob URL → fetch in-page → base64 → save
+          6. Else, try legacy <video src="http://..."> extraction
+
         Args:
-            prompt: Chinese video generation prompt, must start with "生成视频，Xs，".
+            prompt: Chinese video generation prompt, typically "生成视频，Xs，...".
             reference_images: Local file paths to paste as visual reference.
             duration_sec: Target duration in seconds (for metadata only).
 
@@ -583,6 +615,14 @@ class DoubaoBrowserClient:
             self.ensure_browser()
             page = self._context.new_page()
 
+            # ── Playwright download listener (must be set BEFORE send) ──
+            download_future: list[Any] = []
+
+            def _on_download(download):
+                download_future.append(download)
+
+            page.on("download", _on_download)
+
             try:
                 # ── 1. Navigate to image creation page ──
                 page.set_default_timeout(self.timeout_sec * 1000)
@@ -595,6 +635,73 @@ class DoubaoBrowserClient:
                         "Doubao cookies expired. Please re-export cookies."
                     )
 
+                # ── 2.5 Switch to "视频" tab ──
+                # The image page defaults to 图片 (image) tab. We MUST
+                # switch to 视频 (video) tab before typing the prompt,
+                # or Doubao generates still images. The tab is a
+                # Radix UI tabs-trigger button inside a carousel-item.
+                # Retry up to 3 times, verifying data-state="active".
+                tab_switched = False
+                for attempt in range(3):
+                    try:
+                        # Find the tab button's bounding box, click it
+                        # via Playwright (full mouse event sequence), then
+                        # verify data-state is "active".
+                        box = page.evaluate("""() => {
+                            const tabs = document.querySelectorAll(
+                                '[data-slot="tabs-trigger"]');
+                            for (const t of tabs) {
+                                if ((t.textContent || '').trim() === '视频') {
+                                    const r = t.getBoundingClientRect();
+                                    return {x: r.x + r.width/2, y: r.y + r.height/2,
+                                            w: r.width, h: r.height};
+                                }
+                            }
+                            return null;
+                        }""")
+                        if box:
+                            page.mouse.click(box["x"], box["y"])
+                            page.wait_for_timeout(1500)
+                            # Verify: did the tab actually activate?
+                            active = page.evaluate("""() => {
+                                const tabs = document.querySelectorAll(
+                                    '[data-slot="tabs-trigger"]');
+                                for (const t of tabs) {
+                                    if ((t.textContent || '').trim() === '视频') {
+                                        return t.getAttribute('data-state');
+                                    }
+                                }
+                                return null;
+                            }""")
+                            if active == "active":
+                                print(f"    [Doubao] ✓ 已切换到「视频」tab "
+                                      f"(data-state=active)")
+                                tab_switched = True
+                                break
+                            else:
+                                print(f"    [Doubao] 「视频」tab state={active}, "
+                                      f"重试 ({attempt+1}/3)...")
+                                page.wait_for_timeout(1000)
+                        else:
+                            if attempt < 2:
+                                page.wait_for_timeout(1500)
+                            else:
+                                print(f"    [Doubao] ⚠ 未找到「视频」tab")
+                    except Exception as e:
+                        if attempt < 2:
+                            page.wait_for_timeout(1000)
+                        else:
+                            print(f"    [Doubao] ⚠ 切换视频tab异常: {e}")
+
+                if not tab_switched:
+                    print(f"    [Doubao] ⚠ 无法切换到视频tab，"
+                          f"依赖prompt中的'生成视频'关键词兜底")
+
+                # ── 3. Find the actual active input (changes after tab switch) ──
+                # After switching to 视频 tab, the image-page input is hidden.
+                # Scan for the real input element and record its selector.
+                prompt_selector = self._find_video_prompt_input(page)
+
                 # Grant clipboard permission (must be after nav to doubao.com origin)
                 try:
                     self._context.grant_permissions(
@@ -603,21 +710,41 @@ class DoubaoBrowserClient:
                 except Exception:
                     pass
 
-                # ── 3. Find and prepare the prompt input ──
-                sel = self.selectors["image"]
-                prompt_selector = sel.get("prompt_input", 'div[contenteditable="true"]')
-                try:
-                    page.wait_for_selector(prompt_selector, timeout=10000)
-                except Exception:
-                    prompt_selector = 'div[contenteditable="true"]'
-                    page.wait_for_selector(prompt_selector, timeout=10000)
-
-                # ── 4. Paste reference images into input (accumulate, no Enter) ──
+                # ── 4. Paste reference images into input ──
                 valid_images = [p for p in reference_images if Path(p).exists()]
+                paste_ok = True
                 if valid_images:
-                    self._paste_images_to_input(page, prompt_selector, valid_images)
+                    attached = self._paste_images_to_input(
+                        page, prompt_selector, valid_images
+                    )
+                    if attached == 0:
+                        paste_ok = False
+                        # Don't proceed — images didn't attach, typing
+                        # prompt and sending will produce wrong results
+                        debug_screenshot = str(
+                            self.output_dir / "debug"
+                            / f"doubao_paste_fail_{vid_id}.png"
+                        )
+                        try:
+                            Path(debug_screenshot).parent.mkdir(
+                                parents=True, exist_ok=True
+                            )
+                            page.screenshot(path=debug_screenshot, full_page=False)
+                        except Exception:
+                            pass
+                        print(
+                            f"    [Doubao] ✗ 图片粘贴失败，附件数=0，"
+                            f"截图: {debug_screenshot}"
+                        )
                 else:
                     print(f"    [Doubao] ⚠ 无有效参考图片，继续纯文本生成")
+
+                if valid_images and not paste_ok:
+                    return ImageResult(
+                        success=False, file_path="",
+                        error="Image paste failed — no attachments detected",
+                        metadata={"paste_failed": True},
+                    )
 
                 # ── 5. Type video prompt AFTER images, clear nothing ──
                 page.click(prompt_selector)
@@ -636,23 +763,89 @@ class DoubaoBrowserClient:
                     page.keyboard.press("Enter")
                 time.sleep(2.0)
 
-                # ── 7. Poll for video completion ──
+                # ── 7. Poll for video/player element (broad detection) ──
                 start = time.time()
-                video_urls: list[str] = []
+                found_content = False
+                content_type = "UNKNOWN"  # Track what was generated: VIDEO, IMAGE, UNKNOWN
                 while time.time() - start < self.timeout_sec:
-                    urls = self._find_video_urls(page)
-                    if urls:
-                        video_urls = urls
+                    # Check: any video element (including blob-src), player container,
+                    # or download button = generation complete
+                    has_content = page.evaluate("""() => {
+                        // Video element with any src (including blob:)
+                        const v = document.querySelector('video');
+                        if (v && (v.src || v.querySelector('source'))) return true;
+                        // Download button
+                        const btns = document.querySelectorAll(
+                            'button, [role="button"], a, div[class*="download"]');
+                        for (const b of btns) {
+                            const t = (b.textContent || '').trim();
+                            const aria = (b.getAttribute('aria-label') || '').trim();
+                            if (t.includes('下载') || t.includes('Download')
+                                || aria.includes('下载') || aria.includes('Download'))
+                                return true;
+                        }
+                        // Player container (Doubao-specific class fragments)
+                        const player = document.querySelector(
+                            '[class*="video-player"], [class*="player-wrapper"], '
+                            + '[class*="seedance"], [class*="Seedance"], '
+                            + '[class*="generated-video"]');
+                        if (player) return true;
+                        return false;
+                    }""")
+                    if has_content:
+                        found_content = True
+                        # ── v0.10: Verify this is actually a video, not an image ──
+                        # Doubao sometimes misinterprets "生成视频" on the image page
+                        # and generates still images instead. Detect this early.
+                        content_type = page.evaluate("""() => {
+                            const video = document.querySelector('video');
+                            const videoSrc = video ? (video.src || '') : '';
+                            const player = document.querySelector(
+                                '[class*="video-player"], [class*="player-wrapper"], '
+                                + '[class*="seedance"], [class*="Seedance"], '
+                                + '[class*="generated-video"]');
+                            if (videoSrc || player) return 'VIDEO';
+                            // Check for image-only: doubao image grid, save-to-kb button
+                            const imgs = document.querySelectorAll(
+                                'img[src*="doubao"], img[class*="result"], '
+                                + 'img[class*="generated"], [class*="image-result"], '
+                                + '[class*="gallery"]');
+                            const saveBtn = document.querySelector(
+                                '[class*="save-to-knowledge"], '
+                                + '[class*="knowledge-base"]');
+                            if ((imgs.length > 0 || saveBtn) && !videoSrc && !player)
+                                return 'IMAGE';
+                            return 'UNKNOWN';
+                        }""")
+                        if content_type == 'IMAGE':
+                            print(f"    [Doubao] ⚠ 豆包误解意图：生成了图片而非视频")
                         break
 
-                    # Check for failure keywords
+                    # ── Moderation / rejection detection ──
                     body_text = page.inner_text("body")
-                    for kw in sel.get("status_failed_keywords", []):
-                        if kw in body_text:
-                            return ImageResult(
-                                success=False, file_path="",
-                                error=f"Video generation failed (keyword: '{kw}')",
-                            )
+                    blocked = self._check_moderation_block(body_text)
+                    if blocked:
+                        # Save debug HTML for post-mortem analysis
+                        debug_html = str(
+                            self.output_dir / "debug"
+                            / f"doubao_moderation_{vid_id}.html"
+                        )
+                        try:
+                            Path(debug_html).parent.mkdir(parents=True, exist_ok=True)
+                            with open(debug_html, "w", encoding="utf-8") as f:
+                                f.write(page.content())
+                        except Exception:
+                            pass
+                        return ImageResult(
+                            success=False, file_path="",
+                            error=blocked["error"],
+                            metadata={
+                                "reason": blocked["reason"],
+                                "suggestion": blocked["suggestion"],
+                                "page_text": body_text[:2000],
+                                "debug_html": debug_html,
+                            },
+                        )
 
                     elapsed = time.time() - start
                     if int(elapsed) % 30 == 0 and int(elapsed) > 0:
@@ -660,23 +853,134 @@ class DoubaoBrowserClient:
 
                     time.sleep(self.poll_interval_sec)
 
-                if not video_urls:
+                if not found_content:
                     debug_dir = self.output_dir / "debug"
                     debug_dir.mkdir(parents=True, exist_ok=True)
                     debug_path = str(debug_dir / f"doubao_video_timeout_{vid_id}.png")
                     page.screenshot(path=debug_path, full_page=False)
-                    print(f"    [Doubao] ⚠ 视频超时 ({int(time.time()-start)}s), 截图: {debug_path}")
+                    html_path = str(debug_dir / f"doubao_video_timeout_{vid_id}.html")
+                    try:
+                        html_content = page.content()
+                        with open(html_path, "w", encoding="utf-8") as f:
+                            f.write(html_content)
+                    except Exception:
+                        pass
+                    print(f"    [Doubao] ⚠ 视频超时 ({int(time.time()-start)}s), "
+                          f"截图: {debug_path}, HTML: {html_path}")
                     return ImageResult(
                         success=False, file_path="",
                         error="Video generation timed out or failed",
                     )
 
-                # ── 8. Download mp4 files ──
-                downloaded = []
-                for i, vurl in enumerate(video_urls):
-                    result_path = self._download_video_url(page, vurl, video_dir, i)
-                    if result_path:
-                        downloaded.append(result_path)
+                # ── v0.10: If Doubao generated an image instead of video ──
+                # (even after clicking "视频" tab, the model may still misread
+                # intent — return a specific error so caller can retry with
+                # stronger prompt wording)
+                if found_content and content_type == "IMAGE":
+                    debug_screenshot = str(
+                        self.output_dir / "debug"
+                        / f"doubao_wrong_type_image_{vid_id}.png"
+                    )
+                    try:
+                        Path(debug_screenshot).parent.mkdir(parents=True, exist_ok=True)
+                        page.screenshot(path=debug_screenshot, full_page=False)
+                    except Exception:
+                        pass
+                    print(
+                        f"    [Doubao] ✗ 生成结果为图片而非视频（豆包误解意图），"
+                        f"截图: {debug_screenshot}"
+                    )
+                    return ImageResult(
+                        success=False, file_path="",
+                        error="Model generated image instead of video — "
+                              "intent misinterpreted by Doubao",
+                        metadata={
+                            "wrong_type": "image",
+                            "retry_strategy": "force_video_mode",
+                        },
+                    )
+
+                # Small wait for DOM to settle after video appears
+                time.sleep(2.0)
+
+                # ── 8. Download: strategy cascade ──
+                downloaded: list[str] = []
+
+                # 8a. Download already captured by listener (auto-download)
+                if download_future:
+                    dl = download_future[0]
+                    save_path = str(video_dir / f"doubao_{vid_id}.mp4")
+                    dl.save_as(save_path)
+                    print(f"    [Doubao] ✓ 捕获自动下载 → {Path(save_path).name}")
+                    downloaded.append(save_path)
+
+                # 8b. Click "下载" button to trigger download
+                if not downloaded:
+                    btn_clicked = page.evaluate("""() => {
+                        const all = document.querySelectorAll(
+                            'button, [role="button"], a, div[class*="download"]');
+                        for (const el of all) {
+                            const t = (el.textContent || '').trim();
+                            const aria = (el.getAttribute('aria-label') || '').trim();
+                            if (t.includes('下载') || t.includes('Download')
+                                || aria.includes('下载') || aria.includes('Download')) {
+                                el.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }""")
+                    if btn_clicked:
+                        time.sleep(3.0)
+                        if download_future:
+                            dl = download_future[0]
+                            save_path = str(video_dir / f"doubao_{vid_id}.mp4")
+                            dl.save_as(save_path)
+                            print(f"    [Doubao] ✓ 点击下载按钮 → {Path(save_path).name}")
+                            downloaded.append(save_path)
+
+                # 8c. Extract blob URL and download via in-page fetch
+                if not downloaded:
+                    blob_data = page.evaluate("""async () => {
+                        const v = document.querySelector('video');
+                        if (!v) return null;
+                        const src = v.src || v.getAttribute('src') || '';
+                        if (!src || !src.startsWith('blob:')) return null;
+                        try {
+                            const resp = await fetch(src);
+                            const blob = await resp.blob();
+                            const buffer = await blob.arrayBuffer();
+                            const bytes = new Uint8Array(buffer);
+                            let binary = '';
+                            for (let i = 0; i < bytes.length; i++)
+                                binary += String.fromCharCode(bytes[i]);
+                            return { base64: btoa(binary), size: bytes.length,
+                                     type: blob.type };
+                        } catch(e) { return {error: e.message}; }
+                    }""")
+                    if blob_data and blob_data.get("base64"):
+                        raw = base64.b64decode(blob_data["base64"])
+                        ext = ".mp4"
+                        if "webm" in blob_data.get("type", ""):
+                            ext = ".webm"
+                        save_path = str(video_dir / f"doubao_{vid_id}{ext}")
+                        with open(save_path, "wb") as f:
+                            f.write(raw)
+                        size_mb = len(raw) / (1024 * 1024)
+                        print(f"    [Doubao] ✓ blob下载 ({size_mb:.1f}MB) → {Path(save_path).name}")
+                        downloaded.append(save_path)
+                    elif blob_data and blob_data.get("error"):
+                        print(f"    [Doubao] ⚠ blob提取失败: {blob_data['error']}")
+
+                # 8d. Legacy: <video src="http://..."> extraction
+                if not downloaded:
+                    video_urls = self._find_video_urls(page)
+                    # Filter to http(s) only (not blob)
+                    http_urls = [u for u in video_urls if u.startswith("http")]
+                    for i, vurl in enumerate(http_urls):
+                        result_path = self._download_video_url(page, vurl, video_dir, i)
+                        if result_path:
+                            downloaded.append(result_path)
 
                 if downloaded:
                     return ImageResult(
@@ -698,108 +1002,243 @@ class DoubaoBrowserClient:
         except CookieExpiredError:
             raise
         except Exception as e:
+            # Build error message safely (emoji in exception text can fail on GBK)
+            try:
+                err_msg = str(e)
+            except Exception:
+                err_msg = repr(e)
             return ImageResult(
                 success=False, file_path="",
-                error=f"Doubao video-from-images generation failed: {e}",
+                error=f"Doubao video-from-images generation failed: {err_msg}",
             )
+    @staticmethod
+    def _find_video_prompt_input(page) -> str:
+        """Find the currently-visible prompt input after tab switch.
+
+        The video tab's input may be a textarea or a contenteditable div.
+        Returns a CSS selector string suitable for page.wait_for_selector /
+        page.click. Falls back to generic contenteditable div.
+        """
+        candidates = page.evaluate("""() => {
+            // Priority 1: visible textarea with placeholder (video tab)
+            const textareas = document.querySelectorAll('textarea');
+            for (const t of textareas) {
+                if (t.offsetParent !== null) {
+                    const ph = t.getAttribute('placeholder') || '';
+                    if (ph.includes('描述') || ph.includes('描述')) {
+                        return {type: 'textarea', selector: 'textarea[placeholder*="描述"]'};
+                    }
+                }
+            }
+            // Priority 2: visible textarea (any)
+            for (const t of textareas) {
+                if (t.offsetParent !== null) {
+                    return {type: 'textarea', selector: 'textarea'};
+                }
+            }
+            // Priority 3: visible contenteditable div (image tab)
+            const divs = document.querySelectorAll('div[contenteditable="true"]');
+            for (const d of divs) {
+                if (d.offsetParent !== null) {
+                    return {type: 'contenteditable', selector: 'div[contenteditable="true"]'};
+                }
+            }
+            return null;
+        }""") or {}
+        selector = candidates.get("selector", 'div[contenteditable="true"]')
+        typ = candidates.get("type", "unknown")
+        print(f"    [Doubao] 检测到输入框: {selector} (type={typ})")
+        # Wait for it
+        try:
+            page.wait_for_selector(selector, timeout=8000)
+        except Exception:
+            selector = 'div[contenteditable="true"]'
+            page.wait_for_selector(selector, timeout=8000)
+        return selector
 
     def _paste_images_to_input(
         self, page, prompt_selector: str, image_paths: list[str]
-    ):
-        """Paste multiple images into Doubao contenteditable input as attachments.
+    ) -> int:
+        """Upload reference images via the hidden file input.
 
-        Images accumulate in the input without sending — caller must type the
-        prompt text and click send afterwards. Uses clipboard API (needs user
-        gesture from click) with DataTransfer dispatch fallback.
+        The video tab has a hidden <input type="file" class="hidden"> near the
+        "参考图" label. We use Playwright's set_input_files() to upload all
+        images at once (the input supports multiple).
 
-        CRITICAL: Does NOT press Enter — images must stay in the input until
-        prompt text is typed and send is clicked once.
+        Returns the number of attached images detected in the DOM after upload.
         """
         import base64
 
         valid = [p for p in image_paths if Path(p).exists()]
         if not valid:
             print(f"    [Doubao] ⚠ 无有效参考图片")
-            return
+            return 0
 
-        print(f"    [Doubao] 准备粘贴 {len(valid)} 张参考图...")
-
+        print(f"    [Doubao] 上传 {len(valid)} 张参考图...")
         for i, img_path in enumerate(valid):
             img_p = Path(img_path)
-            with open(img_p, "rb") as f:
-                img_bytes = f.read()
-            b64 = base64.b64encode(img_bytes).decode("ascii")
-            size_kb = len(img_bytes) // 1024
+            size_kb = img_p.stat().st_size // 1024
             print(f"    [Doubao] [{i+1}/{len(valid)}] {img_p.name} ({size_kb}KB)")
 
-            # Click input first — triggers user activation for clipboard API
-            page.click(prompt_selector)
-            time.sleep(0.2)
+        # ── Strategy 1: set_input_files on the hidden file input ──
+        abs_paths = [str(Path(p).resolve()) for p in valid]
+        try:
+            # The video tab's file input: hidden, multiple, accepts images
+            page.set_input_files(
+                'input[type="file"][accept*=".jpg"]', abs_paths
+            )
+            print(f"    [Doubao] ✓ set_input_files({len(abs_paths)} files)")
+        except Exception as e:
+            print(f"    [Doubao] ✗ set_input_files 失败: {e}")
+            return 0
 
-            pasted = False
-            # ── Method 1: clipboard API (requires user gesture from click above) ──
-            try:
-                page.evaluate("""async (b64) => {
-                    const byteChars = atob(b64);
-                    const byteArr = new Uint8Array(byteChars.length);
-                    for (let i = 0; i < byteChars.length; i++)
-                        byteArr[i] = byteChars.charCodeAt(i);
-                    const blob = new Blob([byteArr], {type: 'image/png'});
-                    await navigator.clipboard.write([
-                        new ClipboardItem({'image/png': blob})
-                    ]);
-                }""", b64)
-                time.sleep(0.4)
-                page.keyboard.press("Control+v")
-                time.sleep(1.0)
-                pasted = True
-            except Exception as e:
-                print(f"    [Doubao] ⚠ 剪贴板API失败: {e}, 尝试DataTransfer...")
+        # Wait for upload processing
+        time.sleep(3.0)
 
-            # ── Method 2: DataTransfer dispatch (fallback, no clipboard needed) ──
-            if not pasted:
-                try:
-                    page.evaluate("""(b64) => {
-                        const byteChars = atob(b64);
-                        const byteArr = new Uint8Array(byteChars.length);
-                        for (let i = 0; i < byteChars.length; i++)
-                            byteArr[i] = byteChars.charCodeAt(i);
-                        const blob = new Blob([byteArr], {type: 'image/png'});
-                        const file = new File([blob], 'ref.png', {type: 'image/png'});
-                        const dt = new DataTransfer();
-                        dt.items.add(file);
-                        const input = document.querySelector(
-                            'div[contenteditable="true"]');
-                        if (!input) return;
-                        input.focus();
-                        input.dispatchEvent(new ClipboardEvent('paste', {
-                            bubbles: true, cancelable: true, clipboardData: dt
-                        }));
-                    }""", b64)
-                    time.sleep(1.0)
-                    pasted = True
-                    print(f"    [Doubao] ✓ DataTransfer paste dispatched")
-                except Exception as e2:
-                    print(f"    [Doubao] ✗ DataTransfer 也失败: {e2}")
+        # ── Verify: count uploaded reference images in the DOM ──
+        # File upload renders as <img> with class*="image-" and blob: src.
+        # Doubao's component: <img class="image-Q7dBqW" src="blob:...">
+        attachment_count = page.evaluate(f"""() => {{
+            const imgs = document.querySelectorAll('img[src]');
+            let count = 0;
+            for (const img of imgs) {{
+                const src = img.getAttribute('src') || '';
+                const cls = img.className || '';
+                // Doubao renders uploaded ref images with
+                // class*="image-" and blob: src
+                if (cls.includes('image-') && src.startsWith('blob:'))
+                    count++;
+            }}
+            return count;
+        }}""")
+        print(f"    [Doubao] 上传后附件数: {attachment_count} "
+              f"(期望: {len(valid)})")
 
-            if pasted:
-                # Small delay between images to let Doubao process each attachment
-                time.sleep(0.5)
+        return attachment_count
+
+    @staticmethod
+    def _check_moderation_block(body_text: str) -> dict | None:
+        """Check page text for Doubao moderation/rejection signals.
+
+        Doubao silently rejects video generation for various reasons. The model
+        stops generating and displays a rejection message instead of a video.
+        This method detects those messages and returns structured info so the
+        caller can adjust the prompt and retry.
+
+        Returns None if no block detected, or a dict with reason + suggestion.
+        """
+        # ── Keyword → (reason_tag, suggestion) mappings ──
+        BLOCK_RULES = [
+            # Real-face / portrait rejection (most common for character refs)
+            ("真实人脸", "真实人脸检测",
+             "参考图中检测到真实人脸特征 → 对参考图做眼部网格遮挡后再试"),
+            ("真人", "真人检测",
+             "参考图被判定含真人 → 降低写实度，加'二次元插画风格'限定"),
+            ("面部", "面部检测",
+             "参考图含可识别面部 → 使用眼部马赛克预处理参考图"),
+            # Copyright / infringement
+            ("侵权", "版权拦截",
+             "prompt 被判定含侵权内容 → 移除具体作品名/角色名，改用特征描述"),
+            ("版权", "版权拦截",
+             "prompt 被判定含版权内容 → 加'原创角色'声明，移除商业IP关联词"),
+            # Content policy violations
+            ("违规", "内容违规",
+             "prompt 触犯内容政策 → 检查是否含血腥/政治/成人暗示，改写中性描述"),
+            ("不符合", "内容不符合规范",
+             "prompt 不符合内容规范 → 简化描述，移除可能敏感的修饰语"),
+            ("无法生成", "内容拒审",
+             "豆包拒绝生成 → 缩短prompt，降低细节密度，分步请求"),
+            ("审核", "审核拦截",
+             "触发审核 → 移除'法宝''武器'等可能涉暴词汇"),
+            # Sensitive imagery
+            ("裸露", "敏感图像",
+             "含敏感图像描述 → 确保所有角色穿着完整"),
+            ("暴力", "暴力内容",
+             "含暴力描述 → 移除打斗/流血/攻击性词汇，改为中性动作"),
+            ("血腥", "血腥内容",
+             "含血腥描述 → 移除相关词，改为'激烈战斗'等抽象表述"),
+            # Generic failure
+            ("生成失败", "生成失败",
+             "豆包返回生成失败 → 缩短prompt或减少参考图数量"),
+            ("请重试", "请重试",
+             "豆包建议重试 → 等待30s后重试当前prompt"),
+        ]
+
+        body = body_text or ""
+        for keyword, reason, suggestion in BLOCK_RULES:
+            if keyword in body:
+                return {"reason": reason, "suggestion": suggestion,
+                        "error": f"[审核拦截: {reason}] {suggestion}"}
+        return None
 
     def _find_video_urls(self, page) -> list[str]:
-        """Find <video> elements on the page and return their src URLs."""
+        """Find generated video URLs on the page.
+
+        Strategy (in order):
+          1. <video> elements with http src
+          2. <source> children inside <video>
+          3. Download links pointing to mp4/mov/webm
+          4. Any link/button with "下载" (download) text whose href is a video
+          5. Video player component data attributes (Doubao-specific)
+        """
         return page.evaluate("""() => {
-            const videos = document.querySelectorAll('video');
             const urls = [];
-            videos.forEach(v => {
-                const src = v.src || v.getAttribute('src') || '';
-                if (src && src.startsWith('http')) urls.push(src);
-                // Also check <source> children
+            const addIfVideo = (url) => {
+                if (!url || typeof url !== 'string') return;
+                const u = url.trim();
+                if (!u || u === 'about:blank') return;
+                if (u.startsWith('blob:')) {
+                    // Blob URLs may be valid but can't download directly — still report
+                    urls.push(u);
+                    return;
+                }
+                if (u.startsWith('http')) urls.push(u);
+            };
+
+            // 1. <video> elements
+            document.querySelectorAll('video').forEach(v => {
+                addIfVideo(v.src || v.getAttribute('src'));
                 v.querySelectorAll('source').forEach(s => {
-                    const ssrc = s.src || s.getAttribute('src') || '';
-                    if (ssrc && ssrc.startsWith('http')) urls.push(ssrc);
+                    addIfVideo(s.src || s.getAttribute('src'));
                 });
             });
+
+            // 2. Download links with video extensions
+            document.querySelectorAll('a[href], a[download]').forEach(a => {
+                const href = a.getAttribute('href') || '';
+                if (/\\.(mp4|mov|webm|avi)(\\?|$)/i.test(href)) {
+                    addIfVideo(href);
+                }
+            });
+
+            // 3. Buttons/links with "下载" (download) text
+            const allNodes = document.querySelectorAll(
+                'a, button, div[role="button"], span[role="button"], '
+                + '[class*="download"], [class*="video-download"]');
+            allNodes.forEach(el => {
+                const text = (el.textContent || '').trim();
+                const href = (el.getAttribute('href') || '');
+                if ((text.includes('下载') || text.includes('Download')) && href) {
+                    addIfVideo(href);
+                }
+                // Also check for video src in data attributes
+                ['data-src', 'data-url', 'data-video-url', 'data-video-src'].forEach(attr => {
+                    addIfVideo(el.getAttribute(attr));
+                });
+            });
+
+            // 4. Doubao-specific: video result container
+            document.querySelectorAll('[class*="video-result"], [class*="video-player"], '
+                + '[class*="generated-video"], [class*="player"], [class*="Seedance"]').forEach(el => {
+                el.querySelectorAll('video, source, a[href]').forEach(child => {
+                    if (child.tagName === 'SOURCE' || child.tagName === 'VIDEO') {
+                        addIfVideo(child.src || child.getAttribute('src'));
+                    } else {
+                        addIfVideo(child.getAttribute('href'));
+                    }
+                });
+            });
+
             return [...new Set(urls)];
         }""")
 

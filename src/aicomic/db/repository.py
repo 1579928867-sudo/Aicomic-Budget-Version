@@ -210,6 +210,22 @@ class Database:
         self.conn.commit()
         return cursor.lastrowid
 
+    def get_novel_by_title(self, title: str) -> dict | None:
+        """Find an existing novel by title (case-insensitive)."""
+        row = self.conn.execute(
+            "SELECT * FROM novel WHERE LOWER(title) = LOWER(?) LIMIT 1",
+            (title,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_chapter_by_num(self, novel_id: int, chapter_num: int) -> dict | None:
+        """Find an existing chapter by novel_id + chapter_num."""
+        row = self.conn.execute(
+            "SELECT * FROM chapter WHERE novel_id = ? AND chapter_num = ? LIMIT 1",
+            (novel_id, chapter_num),
+        ).fetchone()
+        return dict(row) if row else None
+
     # ── Chapter ──
 
     def create_chapter(
@@ -519,7 +535,20 @@ class Database:
         is_default: int = 0,
         activation_condition: str = "",
     ) -> int:
-        """Create or replace a character_outfit row. Returns the outfit id."""
+        """Create or replace a character_outfit row. Returns the outfit id.
+
+        IMPORTANT: preserves existing image_path when the new value is empty.
+        This prevents CharDesigner (which always passes image_path="") from
+        overwriting paths set by ImageGenerator.
+        """
+        existing = self.conn.execute(
+            "SELECT image_path FROM character_outfit WHERE character_id = ? AND tag = ?",
+            (character_id, tag),
+        ).fetchone()
+        # If updating and new image_path is empty, keep the existing one
+        if existing and existing["image_path"] and not image_path:
+            image_path = existing["image_path"]
+
         cursor = self.conn.execute(
             """INSERT INTO character_outfit
                (character_id, tag, prompt, image_path, is_default, activation_condition)
