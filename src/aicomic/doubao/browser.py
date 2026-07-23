@@ -763,13 +763,49 @@ class DoubaoBrowserClient:
                         metadata={"paste_failed": True},
                     )
 
-                # ── 5. Type video prompt AFTER images, clear nothing ──
+                # ── 5. Set up network interception BEFORE sending ──
+                # Doubao's new player doesn't use <video> tags or trigger
+                # browser downloads. The only reliable way to capture the
+                # generated video URL is to intercept network responses.
+                captured_video_urls: list[str] = []
+                captured_downloads: list[Any] = []
+
+                def _on_response(response):
+                    url = response.url
+                    ct = (response.headers.get('content-type', '') or '').lower()
+                    cd = (response.headers.get('content-disposition', '') or '').lower()
+                    # Direct mp4/mov/webm URLs
+                    if any(ext in url.lower() for ext in ['.mp4', '.mov', '.webm']):
+                        if url not in captured_video_urls:
+                            captured_video_urls.append(url)
+                            print(f"    [Doubao] 网络拦截: {Path(url).name} (ext match)")
+                        return
+                    # Video content-type
+                    if any(x in ct for x in ['video/', 'application/octet-stream']):
+                        if url not in captured_video_urls:
+                            captured_video_urls.append(url)
+                            print(f"    [Doubao] 网络拦截: {url[:100]}... ({ct})")
+                        return
+                    # Content-disposition: attachment with video filename
+                    if 'attachment' in cd and any(ext in cd for ext in ['.mp4', '.mov', '.webm']):
+                        if url not in captured_video_urls:
+                            captured_video_urls.append(url)
+                            print(f"    [Doubao] 网络拦截: {url[:100]}... (attachment)")
+                    # Doubao-specific CDN patterns
+                    if any(pat in url.lower() for pat in ['seedance', 'video-generated', 'output']):
+                        if '.mp4' not in url and url not in captured_video_urls:
+                            captured_video_urls.append(url)
+                            print(f"    [Doubao] 网络拦截: {url[:100]}... (doubao pattern)")
+
+                page.on("response", _on_response)
+
+                # ── 6. Type video prompt AFTER images, clear nothing ──
                 page.click(prompt_selector)
                 time.sleep(0.3)
                 page.keyboard.insert_text(prompt)
                 time.sleep(1.5)
 
-                # ── 6. Click send ONCE ──
+                # ── 7. Click send ──
                 send_clicked = self._click_send_button(page)
                 if not send_clicked:
                     time.sleep(2)
@@ -780,72 +816,59 @@ class DoubaoBrowserClient:
                     page.keyboard.press("Enter")
                 time.sleep(2.0)
 
-                # ── 7. Poll for video/player element (broad detection) ──
+                # ── 8. Poll for completion (network-first, DOM-fallback) ──
                 start = time.time()
                 found_content = False
-                content_type = "UNKNOWN"  # Track what was generated: VIDEO, IMAGE, UNKNOWN
-                moderation_grace_period = 25  # seconds — our prompt text is still on the page
+                content_type = "UNKNOWN"
+                moderation_grace_period = 25
                 while time.time() - start < self.timeout_sec:
                     elapsed = time.time() - start
-                    # Check: any video element (including blob-src), player container,
-                    # or download button = generation complete
+
+                    # Check network captures first (most reliable)
+                    if captured_video_urls and not found_content:
+                        found_content = True
+                        content_type = "VIDEO"
+                        print(f"    [Doubao] ✓ 网络拦截到视频URL ({len(captured_video_urls)}个)")
+                        if int(elapsed) < 20:
+                            # Give player a moment to finish loading before downloading
+                            time.sleep(5)
+                        break
+
+                    # DOM-based detection (fallback)
                     has_content = page.evaluate("""() => {
-                        // Video element with any src (including blob:)
                         const v = document.querySelector('video');
-                        if (v && (v.src || v.querySelector('source'))) return true;
-                        // Download button
+                        if (v && (v.src || v.querySelector('source'))) return 'VIDEO';
                         const btns = document.querySelectorAll(
                             'button, [role="button"], a, div[class*="download"]');
                         for (const b of btns) {
                             const t = (b.textContent || '').trim();
-                            const aria = (b.getAttribute('aria-label') || '').trim();
-                            if (t.includes('下载') || t.includes('Download')
-                                || aria.includes('下载') || aria.includes('Download'))
-                                return true;
+                            if (t.includes('下载') || t.includes('Download')) return 'DOWNLOAD_BTN';
                         }
-                        // Player container (Doubao-specific class fragments)
                         const player = document.querySelector(
                             '[class*="video-player"], [class*="player-wrapper"], '
-                            + '[class*="seedance"], [class*="Seedance"], '
-                            + '[class*="generated-video"]');
-                        if (player) return true;
-                        return false;
+                            + '[class*="seedance"], [class*="generated-video"]');
+                        if (player) return 'PLAYER';
+                        // Image detection
+                        const imgs = document.querySelectorAll(
+                            'img[src*="doubao"], [class*="image-result"], '
+                            + '[class*="gallery"], [class*="generated"]');
+                        if (imgs.length >= 4) return 'IMAGE';
+                        return null;
                     }""")
                     if has_content:
                         found_content = True
-                        # ── v0.10: Verify this is actually a video, not an image ──
-                        # Doubao sometimes misinterprets "生成视频" on the image page
-                        # and generates still images instead. Detect this early.
-                        content_type = page.evaluate("""() => {
-                            const video = document.querySelector('video');
-                            const videoSrc = video ? (video.src || '') : '';
-                            const player = document.querySelector(
-                                '[class*="video-player"], [class*="player-wrapper"], '
-                                + '[class*="seedance"], [class*="Seedance"], '
-                                + '[class*="generated-video"]');
-                            if (videoSrc || player) return 'VIDEO';
-                            // Check for image-only: doubao image grid, save-to-kb button
-                            const imgs = document.querySelectorAll(
-                                'img[src*="doubao"], img[class*="result"], '
-                                + 'img[class*="generated"], [class*="image-result"], '
-                                + '[class*="gallery"]');
-                            const saveBtn = document.querySelector(
-                                '[class*="save-to-knowledge"], '
-                                + '[class*="knowledge-base"]');
-                            if ((imgs.length > 0 || saveBtn) && !videoSrc && !player)
-                                return 'IMAGE';
-                            return 'UNKNOWN';
-                        }""")
+                        content_type = has_content
                         if content_type == 'IMAGE':
                             print(f"    [Doubao] ⚠ 豆包误解意图：生成了图片而非视频")
+                        else:
+                            print(f"    [Doubao] ✓ 检测到内容: {content_type}")
                         break
 
-                    # ── Moderation / rejection detection (skip early — our prompt text is still visible) ──
+                    # Moderation check (only after grace period)
                     if elapsed > moderation_grace_period:
                         body_text = page.inner_text("body")
                         blocked = self._check_moderation_block(body_text)
                         if blocked:
-                            # Save debug HTML for post-mortem analysis
                             debug_html = str(
                                 self.output_dir / "debug"
                                 / f"doubao_moderation_{vid_id}.html"
@@ -868,7 +891,8 @@ class DoubaoBrowserClient:
                             )
 
                     if int(elapsed) % 30 == 0 and int(elapsed) > 0:
-                        print(f"    [Doubao] 等待视频生成... ({int(elapsed)}s)")
+                        print(f"    [Doubao] 等待视频生成... ({int(elapsed)}s)"
+                              + (f" 网络URL:{len(captured_video_urls)}" if captured_video_urls else ""))
 
                     time.sleep(self.poll_interval_sec)
 
@@ -919,26 +943,36 @@ class DoubaoBrowserClient:
                         },
                     )
 
-                # Wait for DOM/Doubao player to fully settle after video appears
-                print(f"    [Doubao] 视频内容已检测到，等待播放器就绪...")
-                time.sleep(8.0)
+                # Wait for player to settle
+                print(f"    [Doubao] 等待播放器就绪...")
+                time.sleep(5.0)
 
-                # ── 8. Download: strategy cascade ──
+                # ── 9. Download: network-capture first, then DOM strategies ──
                 downloaded: list[str] = []
 
-                # 8a. Download already captured by listener (auto-download)
-                if download_future:
+                # 9a. PRIMARY: Download video URLs captured by network interception
+                if captured_video_urls:
+                    print(f"    [Doubao] 网络拦截到 {len(captured_video_urls)} 个视频URL，开始下载...")
+                    for i, vurl in enumerate(captured_video_urls):
+                        result_path = self._download_video_url(page, vurl, video_dir, i)
+                        if result_path:
+                            print(f"    [Doubao] ✓ 网络URL下载: {Path(result_path).name}")
+                            downloaded.append(result_path)
+
+                # 9b. Download captured by Playwright download listener
+                if not downloaded and download_future:
                     dl = download_future[0]
                     save_path = str(video_dir / f"doubao_{vid_id}.mp4")
                     dl.save_as(save_path)
-                    print(f"    [Doubao] ✓ 捕获自动下载 → {Path(save_path).name}")
+                    print(f"    [Doubao] ✓ 浏览器下载事件: {Path(save_path).name}")
                     downloaded.append(save_path)
 
-                # 8b. Click "下载" button to trigger download
+                # 9c. Click download button
                 if not downloaded:
                     btn_clicked = page.evaluate("""() => {
                         const all = document.querySelectorAll(
-                            'button, [role="button"], a, div[class*="download"]');
+                            'button, [role="button"], a, div[class*="download"], '
+                            + '[class*="toolbar"] button, [class*="action"] button');
                         for (const el of all) {
                             const t = (el.textContent || '').trim();
                             const aria = (el.getAttribute('aria-label') || '').trim();
@@ -956,10 +990,10 @@ class DoubaoBrowserClient:
                             dl = download_future[0]
                             save_path = str(video_dir / f"doubao_{vid_id}.mp4")
                             dl.save_as(save_path)
-                            print(f"    [Doubao] ✓ 点击下载按钮 → {Path(save_path).name}")
+                            print(f"    [Doubao] ✓ 下载按钮: {Path(save_path).name}")
                             downloaded.append(save_path)
 
-                # 8c. Extract blob URL and download via in-page fetch
+                # 9d. Blob URL via in-page fetch
                 if not downloaded:
                     blob_data = page.evaluate("""async () => {
                         const v = document.querySelector('video');
@@ -980,19 +1014,14 @@ class DoubaoBrowserClient:
                     }""")
                     if blob_data and blob_data.get("base64"):
                         raw = base64.b64decode(blob_data["base64"])
-                        ext = ".mp4"
-                        if "webm" in blob_data.get("type", ""):
-                            ext = ".webm"
+                        ext = ".webm" if "webm" in blob_data.get("type", "") else ".mp4"
                         save_path = str(video_dir / f"doubao_{vid_id}{ext}")
                         with open(save_path, "wb") as f:
                             f.write(raw)
-                        size_mb = len(raw) / (1024 * 1024)
-                        print(f"    [Doubao] ✓ blob下载 ({size_mb:.1f}MB) → {Path(save_path).name}")
+                        print(f"    [Doubao] ✓ blob: {Path(save_path).name} ({len(raw)//1024}KB)")
                         downloaded.append(save_path)
-                    elif blob_data and blob_data.get("error"):
-                        print(f"    [Doubao] ⚠ blob提取失败: {blob_data['error']}")
 
-                # 8d. Legacy: <video src="http://..."> extraction
+                # 9e. Legacy DOM: <video src>, download links, HTML regex scan
                 if not downloaded:
                     video_urls = self._find_video_urls(page)
                     # Filter to http(s) only (not blob)
@@ -1002,7 +1031,7 @@ class DoubaoBrowserClient:
                         if result_path:
                             downloaded.append(result_path)
 
-                # 8e. Broader scan: grep full DOM HTML for any mp4/mov URL
+                # 9f. Broader DOM scan: regex on full HTML for mp4 URLs
                 if not downloaded:
                     try:
                         html = page.content()
