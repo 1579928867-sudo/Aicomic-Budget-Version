@@ -143,7 +143,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
         image_prompt = shot.get("image_prompt", "")
         narration = shot.get("narration", "")
         camera = shot.get("camera_movement", "")
-        duration = shot.get("duration_sec", self.duration_sec)
+        duration = shot.get("duration_sec", self.duration_sec)  # reserved for metadata, not in prompt
 
         # ── Normalize terms (fix typos that match commercial brands) ──
         image_prompt = normalize_prompt_terms(image_prompt)
@@ -167,7 +167,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
         motion = camera_motion_map.get(camera, "镜头稳定，画面自然呈现")
 
         parts = [
-            f"生成视频，{duration}秒。{image_prompt}。",
+            f"生成视频。{image_prompt}。",
             f"{motion}。",
         ]
 
