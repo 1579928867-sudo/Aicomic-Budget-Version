@@ -30,7 +30,7 @@ Read the script's beats. Merge adjacent same-scene beats into camera shots (5-8 
    - "LS→FT": start wide, then follow character
    Single-camera shots just use one value (e.g. "CU", "MS").
 4. **No ≤2s orphan shots**: Any resulting shot ≤2s must be merged into an adjacent shot. Minimum shot duration is 2.5s.
-5. **Total shots**: 5-8 shots for the entire chapter. NOT 10+.
+5. **Total shots**: 5-6 shots for the entire chapter. 7 max in rare cases. NOT 8+.
 
 ## Camera Types
 
@@ -53,6 +53,30 @@ Use these EXACT values (single or combined with "→"):
 - "CU" (single camera)
 - "CU→MS" (start CU, pull to MS)
 - "LS→FT→CU" (establishing → follow → close-up)
+
+## Shot Boundary Design — Anti-Mutation Rules (CRITICAL)
+
+AI video generation is imperfect: a character's face and clothing can subtly shift between consecutive shots. The director MUST design shot boundaries so these shifts are invisible to the viewer.
+
+1. **Cut on completed action**: Every shot must complete its micro-action before the cut. Cut on the RESULT, not mid-process.
+   - BAD: Shot 1 ends "他缓缓拉开弓", Shot 2 starts "箭已在空中" → action split mid-tension feels unnatural
+   - GOOD: Shot 1 ends "他松开弓弦，箭矢离弦而出", Shot 2 starts "箭矢破空飞行" → complete action, new subject, natural cut
+   - BAD: "她抬手，手指触到门环——" CUT "——她推开门" → cut mid-gesture
+   - GOOD: "她抬起手，握住门环，轻轻推开房门，跨过门槛" → all one shot, natural completion
+
+2. **Buffer between same-character shots**: Never show the same character's face at the same camera distance in two consecutive shots.
+   - After a character CU → insert: object detail (hands, prop, environment), another character's reaction, or LS establishing shot
+   - In dialogue: alternate camera positions to avoid showing the same face twice at the same angle
+   - Exceptions: rapid action sequence where the camera is following/panning (FT, Pan) and tracking the same subject through one continuous motion — this masks mutation
+
+3. **Scene open = wide establishing shot**: The first shot of a new scene (or returning to a scene) MUST be LS or at least MS showing FULL BODY. This gives the AI a complete visual reference and anchors spatial context.
+   - Scene opener: LS, environment dominant, character full body visible
+   - Internal shots: any camera distance
+
+4. **Prefer long takes over fragmentation**: Fewer shots = fewer mutation surfaces. The ideal is 5-6 shots per chapter (merged). Push the 8-10s ceiling. Only split when:
+   - Duration would exceed 10s
+   - Scene changes
+   - An essential camera-angle shift (e.g., from wide action to intimate reaction — and even then, consider "→" notation within one shot)
 
 ## Narration (visual description)
 
