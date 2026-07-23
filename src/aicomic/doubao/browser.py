@@ -947,63 +947,53 @@ class DoubaoBrowserClient:
                 print(f"    [Doubao] 等待播放器就绪...")
                 time.sleep(5.0)
 
-                # ── 9. Download: click video → overlay → save button ──
-                # Correct flow: 1) click the generated video to open it in a
-                # half-page overlay, 2) find the blue "保存" button at the
-                # top-right of the overlay, 3) click it to trigger download.
+                # ── 9. Download: bottom-left download button on video card ──
+                # After generation, each video card has a download button at its
+                # bottom-left corner. Click it directly — no overlay needed.
                 downloaded: list[str] = []
 
-                # 9a. Click the generated video to open the overlay
-                # The video result is usually in a card/grid. Try multiple selectors.
-                video_clicked = page.evaluate("""() => {
-                    // Try: video player container, generated result card, or first large media element
-                    const candidates = [
-                        ...document.querySelectorAll('[class*="video"]'),
-                        ...document.querySelectorAll('[class*="player"]'),
-                        ...document.querySelectorAll('[class*="result"]'),
-                        ...document.querySelectorAll('[class*="generated"]'),
-                        ...document.querySelectorAll('video'),
-                        ...document.querySelectorAll('[class*="card"]'),
-                    ];
-                    for (const el of candidates) {
-                        if (el.tagName === 'VIDEO') { el.click(); return 'clicked-video'; }
-                        const r = el.getBoundingClientRect();
-                        if (r.width > 200 && r.height > 150) {
-                            el.click();
-                            return 'clicked-' + (el.className || el.tagName).toString().slice(0,40);
+                # 9a. Primary: find download btn inside/near video cards
+                # The button is positioned at the bottom-left of generated video frames
+                dl_btn = page.evaluate("""() => {
+                    // Strategy 1: buttons with download SVG/icons inside media containers
+                    for (const container of document.querySelectorAll(
+                        '[class*="video"], [class*="media"], [class*="result"], '
+                        + '[class*="card"], [class*="item"], [class*="generated"]')) {
+                        const btns = container.querySelectorAll(
+                            'button, [role="button"], [class*="download"], '
+                            + '[class*="save"], [class*="action"]');
+                        for (const btn of btns) {
+                            const t = (btn.textContent || '').trim();
+                            const aria = (btn.getAttribute('aria-label') || '').trim();
+                            if (['下载', '保存', 'Download', 'Save'].includes(t)
+                                || ['下载', '保存', 'Download', 'Save'].includes(aria)) {
+                                btn.click();
+                                return 'container-btn:' + (t || aria);
+                            }
                         }
                     }
-                    return null;
-                }""")
-                if video_clicked:
-                    print(f"    [Doubao] 点击视频元素: {video_clicked}")
-                    time.sleep(2.0)
-                else:
-                    # Fallback: click first visible video-size area via mouse
-                    print(f"    [Doubao] 尝试鼠标双击视频区域...")
-                    try:
-                        page.mouse.click(400, 350)  # center-ish of typical result area
-                        time.sleep(1.0)
-                    except Exception:
-                        pass
-
-                # 9b. Find and click the blue "保存" button in the overlay
-                save_clicked = page.evaluate("""() => {
-                    for (const el of document.querySelectorAll(
-                        'button, [role="button"], span, div')) {
-                        const t = (el.textContent || '').trim();
-                        if (t === '保存' || t === 'Save') {
-                            el.click();
+                    // Strategy 2: any button/icon at bottom-left area of page
+                    for (const btn of document.querySelectorAll(
+                        'button, [role="button"], svg')) {
+                        const t = (btn.textContent || btn.getAttribute('aria-label') || '').trim();
+                        if (['下载', 'Download', '保存', 'Save'].includes(t)) {
+                            btn.click();
                             return 'text-match:' + t;
                         }
                     }
+                    // Strategy 3: click download by aria-label
+                    for (const el of document.querySelectorAll('[aria-label]')) {
+                        const a = el.getAttribute('aria-label') || '';
+                        if (a === '下载' || a === 'Download' || a === '保存' || a === 'Save') {
+                            el.click();
+                            return 'aria:' + a;
+                        }
+                    }
                     return null;
                 }""")
-                if save_clicked:
-                    print(f"    [Doubao] 点击保存按钮: {save_clicked}")
-                    time.sleep(2.0)
-                else:
-                    print(f"    [Doubao] ⚠ 未找到保存按钮，尝试其他方式...")
+                if dl_btn:
+                    print(f"    [Doubao] 找到下载按钮: {dl_btn}")
+                    time.sleep(2.5)
 
                 # 9c. Check Playwright download listener
                 if download_future:
