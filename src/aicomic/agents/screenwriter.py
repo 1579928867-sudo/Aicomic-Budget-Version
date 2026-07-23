@@ -11,99 +11,40 @@ from typing import Any
 from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
 
-STORYBOARD_SYSTEM_PROMPT = """You are a professional storyboard director (分镜导演) for Chinese short-drama (竖屏漫剧) production. Your input is a complete drama script with fine-grained beats (each beat = one micro-action or one line of dialogue). Your output is a set of merged camera shots.
+STORYBOARD_SYSTEM_PROMPT = """你是专业的漫剧分镜导演，输入是视频原生剧本（每个 beat = 1 个 10s 镜头），你需要 1:1 翻译为时间分段分镜脚本——每个镜头的 10 秒拆分为 [0-3秒]、[3-7秒]、[7-10秒] 三个时间段，精确控制节奏。
 
-## Core Task
+## 每个 shot 必须包含 segments（3 段时间段数组）
 
-Read the script's beats. Merge adjacent same-scene beats into camera shots (5-8 shots total per chapter, each ≤10s). Design camera movement, shot type, and visual narration for each merged shot.
+每个 segment 是一个时间段内的精确拍摄指令：
+- **time_range**: "0-3秒" / "3-7秒" / "7-10秒"
+- **camera**: 镜头景别和运镜。景别：特写、大特写、近景、中景、全景、远景、过肩。运镜可组合：推镜、拉远、跟拍、环绕、仰拍、俯拍、手持跟甩、360°环绕。例如 "特写推镜"、"全景拉远"、"中景环绕"、"低角度仰拍跟拍"
+- **action**: 该时间段内的完整画面描述——人物在做什么、表情变化、身体动作、环境变化。必须足够细致，能让 AI 理解这一段的完整视觉内容
+- **dialogue**: 台词，格式为 "角色名（情绪，音色：XXX）: 台词内容"。纯动作无台词则为 null
+- **sound**: 音效描述，例如 "床铺轻微吱呀声"、"拳脚破空闷响"、"静谧中的呼吸声"
+- **transition**: 该时间段与下一时间段的衔接指令（从第二个镜头开始，如果是衔接前一个镜头的内容则说明）。0-3秒可为 null
 
-## Shot Merging Rules (CRITICAL)
+## 音色固定（必须！）
 
-1. **Merge adjacent same-scene beats**: Beats in the same scene (same scene_name) with related characters and connectable action should be merged into ONE shot.
-2. **Duration cap**: Each merged shot MUST be ≤10s. Assign realistic durations:
-   - Pure action beat: 1-3s depending on complexity
-   - Pure dialogue: 1s per 3 Chinese characters
-   - If merging would exceed 10s, split into two shots.
-3. **Camera transitions**: When merging beats with different ideal camera distances, use "→" notation:
-   - "CU→MS": start close-up, pull back to medium shot
-   - "Push→ECU": push in from push to extreme close-up
-   - "LS→FT": start wide, then follow character
-   Single-camera shots just use one value (e.g. "CU", "MS").
-4. **No ≤2s orphan shots**: Any resulting shot ≤2s must be merged into an adjacent shot. Minimum shot duration is 2.5s.
-5. **Total shots**: 5-6 shots for the entire chapter. 7 max in rare cases. NOT 8+.
+每个有台词的 segment 必须指定音色，音色与角色绑定且全剧一致：
+- 对话格式：角色名（情绪，音色：清朗少年）: 台词内容
+- 内心独白格式：角色名（内心，情绪，音色：清朗少年）: 独白内容
+- 常用音色库：清朗少年、温润青年、冷峻青年、清脆少女、温婉女子、威严老者、沙哑反派
+- 每个角色首次出场时确定音色，后续保持一致
 
-## Camera Types
+## 衔接规则（从第二个镜头开始）
 
-Use these EXACT values (single or combined with "→"):
+第三个段（7-10秒）的最后一句要自然过渡到下一个镜头：
+- transition 字段写 "衔接镜头{N+1}的0-3秒，[简述如何过渡]"
+- 动作不重复——下一镜头起始必须是上一镜头结束的自然延续
 
-| Value | Description |
-|-------|-------------|
-| "LS" | Long Shot — full body, environment dominant |
-| "MS" | Medium Shot — knees up, balanced |
-| "CU" | Close-Up — chest up, expression focus |
-| "ECU" | Extreme Close-Up — local detail (hands, eyes, props) |
-| "HA" | High Angle — looking down |
-| "LA" | Low Angle — looking up |
-| "OTS" | Over-the-Shoulder — dialogue confrontations |
-| "FT" | Follow Tracking — character movement |
-| "Pan" | Panning — horizontal sweep |
-| "Push" | Push In — camera pushes forward |
+## 场景总结
 
-**Examples of valid camera_movement values:**
-- "CU" (single camera)
-- "CU→MS" (start CU, pull to MS)
-- "LS→FT→CU" (establishing → follow → close-up)
-
-## Shot Boundary Design — Anti-Mutation Rules (CRITICAL)
-
-AI video generation is imperfect: a character's face and clothing can subtly shift between consecutive shots. The director MUST design shot boundaries so these shifts are invisible to the viewer.
-
-1. **Cut on completed action**: Every shot must complete its micro-action before the cut. Cut on the RESULT, not mid-process.
-   - BAD: Shot 1 ends "他缓缓拉开弓", Shot 2 starts "箭已在空中" → action split mid-tension feels unnatural
-   - GOOD: Shot 1 ends "他松开弓弦，箭矢离弦而出", Shot 2 starts "箭矢破空飞行" → complete action, new subject, natural cut
-   - BAD: "她抬手，手指触到门环——" CUT "——她推开门" → cut mid-gesture
-   - GOOD: "她抬起手，握住门环，轻轻推开房门，跨过门槛" → all one shot, natural completion
-
-2. **Buffer between same-character shots**: Never show the same character's face at the same camera distance in two consecutive shots.
-   - After a character CU → insert: object detail (hands, prop, environment), another character's reaction, or LS establishing shot
-   - In dialogue: alternate camera positions to avoid showing the same face twice at the same angle
-   - Exceptions: rapid action sequence where the camera is following/panning (FT, Pan) and tracking the same subject through one continuous motion — this masks mutation
-
-3. **Scene open = wide establishing shot**: The first shot of a new scene (or returning to a scene) MUST be LS or at least MS showing FULL BODY. This gives the AI a complete visual reference and anchors spatial context.
-   - Scene opener: LS, environment dominant, character full body visible
-   - Internal shots: any camera distance
-
-4. **Prefer long takes over fragmentation**: Fewer shots = fewer mutation surfaces. The ideal is 5-6 shots per chapter (merged). Push the 8-10s ceiling. Only split when:
-   - Duration would exceed 10s
-   - Scene changes
-   - An essential camera-angle shift (e.g., from wide action to intimate reaction — and even then, consider "→" notation within one shot)
-
-## Narration (visual description)
-
-The `narration` field describes what the viewer sees throughout the merged shot. Compose it by joining beat actions in time order:
-- "萧澈缓缓睁开眼睛，眼神茫然。随后他快速坐起，环顾四周，发现自己躺在一张挂着红色幔帐的大床上。"
-- Include expressions from the script: "...眼神茫然..." "...满脸喜色..."
-- Do NOT repeat dialogue in narration — dialogue goes in the `dialogue` field.
-
-## Dialogue
-
-Merge dialogue lines from all beats in the shot. Format: "Name: 内容" separated by newlines.
-- Include emotion hints from the script: "萧澈（困惑）: 小姑妈？"
-- If no dialogue in the merged shot, use empty string "".
-
-## Shot Type
-
-- "action": no dialogue
-- "dialogue": pure speech
-- "both": action + dialogue simultaneously
-
-## Characters
-
-List every character appearing in this shot. Use "default" variant unless the script indicates outfit changes.
+每个 shot 末尾必须有一句场景总结（单列字段 scene_summary）：
+格式："场景: [地点描述]，[光线/氛围描述]。（视频不要添加字幕）"
 
 ## Output Format
 
-Return ONLY valid JSON:
+只输出 JSON，格式如下：
 
 {
   "scenes": [
@@ -114,12 +55,36 @@ Return ONLY valid JSON:
         {
           "shot_num": 1,
           "shot_type": "both",
-          "duration_sec": 8.0,
+          "duration_sec": 10.0,
           "characters": [{"name": "萧澈", "variant": "default"}],
           "scene_name": "婚房",
-          "narration": "萧澈缓缓睁开眼睛，眼神茫然，快速坐起环顾四周。红色幔帐飘动，暖黄晨光洒入房间。",
-          "dialogue": "萧澈（困惑）: 这...这是哪里？",
-          "camera_movement": "CU→MS"
+          "segments": [
+            {
+              "time_range": "0-3秒",
+              "camera": "特写推镜",
+              "action": "萧澈紧闭的双眼微微颤动，意识从混沌中苏醒。暖黄晨光透过雕花窗棂洒在他脸上，睫毛轻颤。",
+              "dialogue": "萧澈（内心，困惑，音色：清朗少年）: 怎么回事……难道我还没有死？",
+              "sound": "床铺轻微吱呀声，远处隐约鸟鸣",
+              "transition": null
+            },
+            {
+              "time_range": "3-7秒",
+              "camera": "中景",
+              "action": "萧澈猛地睁开眼睛，瞳孔骤缩。他快速坐起身，红色幔帐在他身后飘动。他低头查看自己的身体，发现毫无痛感，神色从茫然转为震惊，环顾四周喜庆的婚房布置。",
+              "dialogue": "萧澈（内心，震惊，音色：清朗少年）: 我明明坠下了绝云崖，怎么可能还活着！而且身上居然没有痛感……",
+              "sound": "身体快速坐起的衣物摩擦声，幔帐飘动的沙沙声",
+              "transition": "延续中景，萧澈环顾四周，镜头跟随他的视线扫过房间"
+            },
+            {
+              "time_range": "7-10秒",
+              "camera": "中景→特写推镜",
+              "action": "萧澈的视线扫过婚房——红色帷帐、喜字剪纸、暖黄烛光。镜头缓缓推近到他的面部特写，他眉头紧锁，嘴唇微张，眼神中充满困惑和警觉。",
+              "dialogue": null,
+              "sound": "静谧中呼吸声，远处风声",
+              "transition": "衔接镜头2的0-3秒：萧澈坐在床上神色警觉，听到门口方向传来声音，缓缓转头"
+            }
+          ],
+          "scene_summary": "场景：中国古代婚房，清晨暖光透过窗棂洒入，红色帷帐飘动，喜庆中带着昏沉。（视频不要添加字幕）"
         }
       ]
     }
@@ -128,15 +93,13 @@ Return ONLY valid JSON:
   "scenes_list": ["婚房"]
 }
 
-## Field Requirements
+## 重点禁止
 
-- **shot_num**: Globally sequential (1, 2, 3, ... N).
-- **shot_type**: "action", "dialogue", or "both".
-- **duration_sec**: 2.5–10.0 seconds. Sum of merged beat durations.
-- **camera_movement**: Single value or "→" separated sequence.
-- **narration**: Complete visual description of the merged shot. Include expressions, atmosphere.
-- **dialogue**: Merged dialogue lines, or empty string.
-- **scene_name**: MUST match the script's scene_name exactly.
+- 不要合并 beats —— 1 beat = 1 shot
+- 不要跳过 segments —— 每个 shot 必须恰好 3 个 segment
+- 对话不要缩写或改写 —— 忠实原文
+- 音色不要遗漏 —— 每个有台词的 segment 必须带音色
+- 不要输出多余文字 —— 只输出 JSON
 """
 
 
@@ -223,9 +186,10 @@ class ScreenwriterAgent(AgentInterface):
                         "narration": shot.get("narration", ""),
                         "dialogue": shot.get("dialogue", ""),
                         "camera_movement": shot.get("camera_movement", "MS"),
-                        "duration_sec": shot.get("duration_sec", 8.0),
+                        "duration_sec": shot.get("duration_sec", 10.0),
                         "char_ids": char_ids,
                         "scene_id": scene_id,
+                        "segments": shot.get("segments", []),
                     })
 
             db.save_storyboard_shots(script_id, shots_flat)
@@ -260,13 +224,19 @@ class ScreenwriterAgent(AgentInterface):
     def _build_user_prompt(self, script_json: dict) -> str:
         """Build the LLM user prompt from script beats."""
         parts = []
-        parts.append("## 剧本\n")
+        parts.append("## 剧本 (视频原生 Beat)\n")
         parts.append(f"时代背景: {script_json.get('era_background', '中国古代·仙侠')}")
+
+        total_beats = sum(
+            len(s.get("beats", [])) for s in script_json.get("scenes", [])
+        )
+        parts.append(f"总 Beat 数: {total_beats} → 每个 beat 翻译为 1 个含 3 段的 shot")
+        parts.append("")
 
         for scene in script_json.get("scenes", []):
             sn = scene.get("scene_name", "?")
             atm = scene.get("atmosphere", "")
-            parts.append(f"\n### 场景: {sn}")
+            parts.append(f"### 场景: {sn}")
             parts.append(f"氛围: {atm}")
             parts.append(f"环境音: {scene.get('scene_sound_cues', [])}")
 
@@ -278,8 +248,11 @@ class ScreenwriterAgent(AgentInterface):
                 dialogue = b.get("dialogue", [])
                 expr = b.get("expressions", {})
                 sound = b.get("sound_cue", "")
+                visual_fx = b.get("visual_fx")
 
                 parts.append(f"  Beat {bn}: {action}")
+                if visual_fx:
+                    parts.append(f"    🎬 visual_fx: {visual_fx}")
                 if dialogue:
                     for d in dialogue:
                         parts.append(
@@ -293,50 +266,48 @@ class ScreenwriterAgent(AgentInterface):
                     parts.append(f"    🔊 {sound}")
 
         parts.append(
-            "\n请将以上剧本 beats 合并为 5-8 个分镜镜头（每个 ≤10s），"
-            "同场景相邻 beats 合并在一起。"
+            f"\n将以上 {total_beats} 个 Beat 一一对应翻译为 {total_beats} 个分镜镜头。"
+            f"每个镜头的 10 秒拆分为 3 个时间段([0-3秒][3-7秒][7-10秒])，"
+            f"每段包含景别运镜、画面描述、台词音效。"
+            f"每个有台词的角色必须指定音色并在全剧保持一致。"
+            f"第二个镜头开始必须写衔接指令。"
         )
         return "\n".join(parts)
 
     @staticmethod
     def _validate_storyboard(script: dict):
-        """Raise ValueError if the storyboard JSON is missing required fields."""
+        """Validate storyboard JSON has required fields and valid segments."""
         if not isinstance(script, dict):
             raise ValueError("Storyboard JSON must be a dict")
         for field in ("scenes", "characters", "scenes_list"):
             if field not in script:
                 raise ValueError(f"Storyboard JSON missing '{field}'")
 
-        # Validate shots — camera_movement now accepts "→" sequences
-        valid_cameras = {
-            "LS", "MS", "CU", "ECU", "HA", "LA", "OTS", "FT", "Pan", "Push",
-            "Pull", "Zoom",
-            "static",
-        }
         valid_shot_types = {"action", "dialogue", "both"}
 
         for scene in script.get("scenes", []):
             for shot in scene.get("shots", []):
-                # Check camera_movement: split on "→", "->", or similar arrow chars
-                # (LLMs occasionally use different arrow variants or encoding)
-                cam = shot.get("camera_movement", "")
-                import re
-                segments = re.split(r"\s*[-–—→⇒➔>]+\s*", cam)
-                for seg in segments:
-                    seg = seg.strip()
-                    if seg and seg not in valid_cameras:
-                        raise ValueError(
-                            f"Invalid camera '{seg}' in shot "
-                            f"{shot.get('shot_num', '?')} (full: '{cam}')"
-                        )
                 st = shot.get("shot_type", "")
                 if st not in valid_shot_types:
                     raise ValueError(
                         f"Invalid shot_type '{st}' in shot {shot.get('shot_num', '?')}"
                     )
                 dur = shot.get("duration_sec", 0)
-                if dur < 1 or dur > 10:
+                if dur < 7.0 or dur > 10.0:
                     raise ValueError(
-                        f"Shot {shot.get('shot_num', '?')} duration {dur}s "
-                        f"out of range (1-10s)"
+                        f"Shot {shot.get('shot_num', '?')} duration {dur}s out of range"
                     )
+                segments = shot.get("segments", [])
+                if len(segments) != 3:
+                    raise ValueError(
+                        f"Shot {shot.get('shot_num', '?')} must have exactly 3 segments, got {len(segments)}"
+                    )
+                for seg in segments:
+                    if not seg.get("camera"):
+                        raise ValueError(
+                            f"Shot {shot.get('shot_num', '?')} segment missing camera"
+                        )
+                    if not seg.get("action"):
+                        raise ValueError(
+                            f"Shot {shot.get('shot_num', '?')} segment missing action"
+                        )

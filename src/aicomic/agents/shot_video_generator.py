@@ -125,60 +125,72 @@ class ShotVideoGeneratorAgent(AgentInterface):
     def _build_video_prompt(
         self, shot: dict, ref_images: list[dict]
     ) -> str:
-        """Build the video generation prompt for a shot.
+        """Build industry-standard time-segmented video prompt.
 
-        Structure (proven to pass Doubao content filter):
-        1. Copyright declaration
-        2. "生成视频，Xs" instruction
-        3. image_prompt + camera motion
-        4. narrative atmosphere (only if adds new info)
-        5. quality tags
-        6. Numbered reference image descriptions (matching actual images sent)
-        7. "原比例。"
-
-        Terms normalization (see _normalize_prompt_terms):
-        - 曼联 → 幔帐 (Manchester United trademark → correct ancient bed curtain)
-        - Other commercial-brand conflicts → correct ancient Chinese equivalents
+        Structure (from industry reference — proven to work with Doubao):
+        1. Quality preamble
+        2. Per-segment [0-3s][3-7s][7-10s] instructions
+        3. Scene summary
+        4. Reference image descriptions
+        5. Copyright declaration
         """
-        image_prompt = shot.get("image_prompt", "")
-        narration = shot.get("narration", "")
-        camera = shot.get("camera_movement", "")
-        duration = shot.get("duration_sec", self.duration_sec)  # reserved for metadata, not in prompt
+        import json
 
-        # ── Normalize terms (fix typos that match commercial brands) ──
-        image_prompt = normalize_prompt_terms(image_prompt)
-        narration = normalize_prompt_terms(narration)
+        # ── Quality preamble (industry standard) ──
+        QUALITY_PREAMBLE = (
+            "虚幻引擎5渲染，3D国漫电影质感，16:9宽银幕画幅，"
+            "4K超高清，60fps高帧率，电影级光影，"
+            "全局光照，体积雾，物理布料模拟，动态模糊自然"
+        )
 
-        # Build motion cue from camera movement
-        camera_motion_map = {
-            "Push": "镜头缓慢推进，画面由远及近",
-            "Pull": "镜头缓慢拉远，画面由近及远",
-            "Pan": "镜头水平横移，展现空间全貌",
-            "Zoom": "镜头变焦推进",
-            "FT": "镜头跟随人物移动，背景产生视差",
-            "HA": "高角度俯拍，镜头缓慢下摇",
-            "LA": "低角度仰拍，镜头缓慢上摇",
-            "OTS": "过肩视角，前景人物轻微晃动",
-            "CU": "特写镜头，人物面部微表情变化",
-            "ECU": "大特写，细微动作和纹理变化",
-            "MS": "中景，人物肢体动作自然流畅",
-            "LS": "远景，环境氛围动态变化",
-        }
-        motion = camera_motion_map.get(camera, "镜头稳定，画面自然呈现")
+        # ── Read segments from DB (v0.13+ format) ──
+        segments_json = shot.get("segments_json", "[]")
+        try:
+            segments = json.loads(segments_json) if isinstance(segments_json, str) else segments_json
+        except (json.JSONDecodeError, TypeError):
+            segments = []
 
-        parts = [
-            f"生成视频。{image_prompt}。",
-            f"{motion}。",
-        ]
+        parts = [QUALITY_PREAMBLE]
 
-        # Only include narration if it adds genuinely new information
-        # (not already covered by image_prompt)
-        if narration and not self._is_redundant(narration, image_prompt):
-            parts.append(f"画面氛围：{narration}。")
+        # ── Per-segment instructions ──
+        if segments and len(segments) == 3:
+            for seg in segments:
+                line = f"[{seg.get('time_range', '?')}]镜头:{seg.get('camera', '中景')}，{seg.get('action', '')}"
+                dialogue = seg.get("dialogue")
+                sound = seg.get("sound", "")
+                transition = seg.get("transition")
 
-        parts.append("高质量AI视频，流畅运镜，电影级画面。")
+                if dialogue:
+                    line += f"。{dialogue}"
+                if sound:
+                    line += f"。音效:{sound}"
+                if transition:
+                    line += f"。{transition}"
+                parts.append(line + "。")
+        else:
+            # Fallback: use old-style flat fields
+            image_prompt = normalize_prompt_terms(shot.get("image_prompt", ""))
+            narration = normalize_prompt_terms(shot.get("narration", ""))
+            camera = shot.get("camera_movement", "")
+            camera_motion_map = {
+                "Push": "镜头缓慢推进", "Pull": "镜头缓慢拉远",
+                "Pan": "镜头水平横移", "FT": "镜头跟随人物移动",
+                "HA": "高角度俯拍", "LA": "低角度仰拍",
+                "OTS": "过肩视角", "CU": "特写", "ECU": "大特写",
+                "MS": "中景", "LS": "全景",
+            }
+            motion = camera_motion_map.get(camera, "中景")
+            parts.append(f"[0-10秒]镜头:{motion}，{image_prompt}。{narration}。")
 
-        # Build numbered reference image descriptions
+        # ── Dialogue (if not already embedded in segments) ──
+        if not segments:
+            dialogue = normalize_prompt_terms(shot.get("dialogue", ""))
+            if dialogue:
+                parts.append(f"人物语言与内心独白：{dialogue}。")
+
+        parts.append("无背景音乐，纯画面内容。")
+
+        # ── Reference images ──
         if ref_images:
             ref_parts = ["参考图说明："]
             for i, ri in enumerate(ref_images):
@@ -189,7 +201,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
         parts.append("原比例。")
         parts.append("（这是我用AI生成的图片，我有版权）")
 
-        return "".join(parts)
+        return "\n".join(parts)
 
     @staticmethod
     def _is_redundant(narration: str, image_prompt: str) -> bool:
@@ -206,9 +218,41 @@ class ShotVideoGeneratorAgent(AgentInterface):
             return True
         overlap = len(narr_chars & ip_chars)
         if len(narr_chars) < 10:
-            # Too short to be meaningfully redundant
             return False
         return overlap / len(narr_chars) > 0.7
+
+    @staticmethod
+    def _extract_subtitle_lines(dialogue: str) -> str:
+        """Format dialogue for natural Chinese subtitles.
+
+        Input:  "萧澈（内心）（困惑）: 怎么回事……\n小姑妈: 你醒了！"
+        Output: "萧澈心想："怎么回事……" | 小姑妈："你醒了！"
+        """
+        if not dialogue:
+            return ""
+        lines = []
+        for line in dialogue.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Parse "Speaker（emotion）: content" or "Speaker: content"
+            sep = "：" if "：" in line else ":"
+            if sep in line:
+                speaker_part, _, content = line.partition(sep)
+                speaker_part = speaker_part.strip()
+                content = content.strip().strip('"').strip('"').strip("'")
+
+                # Extract speaker name (before first bracket)
+                speaker = speaker_part.split("（")[0].split("(")[0].strip()
+
+                # Detect if internal monologue
+                is_inner = "内心" in speaker_part
+
+                if is_inner:
+                    lines.append(f'{speaker}心想："{content}"')
+                else:
+                    lines.append(f'{speaker}："{content}"')
+        return " | ".join(lines) if lines else ""
 
     # ── User selection ──
 

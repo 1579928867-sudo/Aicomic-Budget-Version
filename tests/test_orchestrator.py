@@ -325,7 +325,7 @@ class FakeLLMForScriptwriter:
 
 
 class FakeLLMForStoryboard:
-    """Returns a valid STORYBOARD JSON (StoryboardAgent output format)."""
+    """Returns a valid STORYBOARD JSON (v0.13 industry format with segments)."""
 
     def generate_json(self, system_prompt, user_prompt, max_tokens=4096):
         return {
@@ -335,12 +335,23 @@ class FakeLLMForStoryboard:
                     "scene_index": 1,
                     "shots": [
                         {
-                            "shot_num": 1, "shot_type": "both", "duration_sec": 8.0,
+                            "shot_num": 1, "shot_type": "both", "duration_sec": 10.0,
                             "characters": [{"name": "叶凡", "variant": "default"}],
                             "scene_name": "山门",
-                            "narration": "叶凡站在山门前，仰望牌匾。深吸一口气。",
-                            "dialogue": "叶凡（感慨）: 这就是青云宗...",
-                            "camera_movement": "LS→CU",
+                            "segments": [
+                                {"time_range": "0-3秒", "camera": "全景",
+                                 "action": "叶凡站在山门前，仰望牌匾。", "dialogue": None,
+                                 "sound": "风声", "transition": None},
+                                {"time_range": "3-7秒", "camera": "中景",
+                                 "action": "叶凡深吸一口气，迈步向前。", "dialogue":
+                                 "叶凡（感慨，音色：清朗少年）: 这就是青云宗...",
+                                 "sound": "脚步声", "transition": "延续中景，叶凡迈入山门"},
+                                {"time_range": "7-10秒", "camera": "全景",
+                                 "action": "叶凡背影消失在云雾缭绕的山门中。", "dialogue": None,
+                                 "sound": "风声渐远",
+                                 "transition": "衔接镜头2的0-3秒"},
+                            ],
+                            "scene_summary": "场景：仙侠山门，云雾缭绕。（视频不要添加字幕）",
                         },
                     ],
                 },
@@ -349,15 +360,25 @@ class FakeLLMForStoryboard:
                     "scene_index": 2,
                     "shots": [
                         {
-                            "shot_num": 2, "shot_type": "both", "duration_sec": 6.0,
+                            "shot_num": 2, "shot_type": "both", "duration_sec": 8.0,
                             "characters": [
                                 {"name": "叶凡", "variant": "default"},
                                 {"name": "长老", "variant": "default"},
                             ],
                             "scene_name": "大殿",
-                            "narration": "殿内，白发长老端坐蒲团之上。叶凡恭敬立于殿中。",
-                            "dialogue": "长老（平静）: 你终于来了。",
-                            "camera_movement": "Pan→MS",
+                            "segments": [
+                                {"time_range": "0-3秒", "camera": "全景",
+                                 "action": "叶凡进入大殿，立于殿中。", "dialogue": None,
+                                 "sound": "脚步声", "transition": None},
+                                {"time_range": "3-7秒", "camera": "中景",
+                                 "action": "白发长老端坐蒲团之上。", "dialogue":
+                                 "长老（平静，音色：威严老者）: 你终于来了。",
+                                 "sound": "静谧", "transition": "延续中景"},
+                                {"time_range": "7-10秒", "camera": "近景",
+                                 "action": "叶凡立于殿中，神色恭敬。", "dialogue": None,
+                                 "sound": "钟声回荡", "transition": None},
+                            ],
+                            "scene_summary": "场景：仙侠大殿，宏伟庄严。（视频不要添加字幕）",
                         },
                     ],
                 },
@@ -474,7 +495,10 @@ def test_full_pipeline_integration():
         # Verify DB: storyboard shots
         shots = db.get_storyboard_shots(1)
         assert len(shots) == 2
-        assert shots[0]["camera_movement"] == "LS→CU"
+        # v0.13+: verify segments_json is stored
+        import json
+        segs = json.loads(shots[0].get("segments_json", "[]"))
+        assert len(segs) == 3
 
         # Verify characters & scenes
         chars = db.conn.execute("SELECT name FROM character_card ORDER BY id").fetchall()

@@ -1,7 +1,7 @@
-"""Video Composer Agent — stitches video clips into a final video with subtitles.
+"""Video Composer Agent — stitches video clips into a final video.
 
-Uses MoviePy to concatenate all video_clips for a script, overlay narration
-and dialogue subtitles, add crossfade transitions, and output a final_video.
+v0.13: Subtitles are embedded by Doubao during video generation — no MoviePy
+text overlays needed. Just concatenate with fade transitions.
 """
 
 from pathlib import Path
@@ -111,16 +111,18 @@ class VideoComposerAgent(AgentInterface):
         chapter_id: int,
         db: Database,
     ) -> str:
-        """Compose video clips with subtitles and transitions using MoviePy.
+        """Compose video clips with transitions using MoviePy.
+
+        v0.13: Subtitles are embedded by Doubao during generation —
+        no MoviePy text overlays needed. Just concatenate + fade.
 
         Override this in tests to skip actual rendering.
         """
         from moviepy import (
             VideoFileClip,
-            TextClip,
-            CompositeVideoClip,
             concatenate_videoclips,
         )
+        from moviepy.video.fx import FadeIn, FadeOut
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -140,46 +142,10 @@ class VideoComposerAgent(AgentInterface):
         if not video_clips:
             raise RuntimeError("Failed to load any video clips")
 
-        # Match shots to clips (1:1 by index)
+        # Apply fade in/out, then concatenate (subtitles already embedded in video)
         processed = []
-        for i, clip in enumerate(video_clips):
-            shot = shots[i] if i < len(shots) else {}
-            narration = shot.get("narration", "")
-            dialogue = shot.get("dialogue", "")
-
-            if narration or dialogue:
-                overlays = [clip]
-
-                if narration:
-                    txt_narration = TextClip(
-                        text=narration,
-                        font_size=24,
-                        color="white",
-                        bg_color="black@0.5",
-                        method="caption",
-                        size=(clip.w * 0.9, None),
-                    ).with_position(("center", clip.h * 0.82)).with_duration(clip.duration)
-
-                    overlays.append(txt_narration)
-
-                if dialogue:
-                    txt_dialogue = TextClip(
-                        text=dialogue,
-                        font_size=32,
-                        color="white",
-                        stroke_color="black",
-                        stroke_width=2,
-                        method="caption",
-                        size=(clip.w * 0.9, None),
-                    ).with_position(("center", clip.h * 0.70)).with_duration(clip.duration)
-
-                    overlays.append(txt_dialogue)
-
-                clip = CompositeVideoClip(overlays)
-
-            # Fade in/out on each clip
-            clip = clip.fadein(0.3).fadeout(0.3)
-
+        for clip in video_clips:
+            clip = clip.with_effects([FadeIn(0.3), FadeOut(0.3)])
             processed.append(clip)
 
         # Concatenate all processed clips

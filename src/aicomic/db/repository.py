@@ -29,7 +29,7 @@ class Database:
             self.conn = None
 
     def init_schema(self):
-        """Create all tables if they do not exist."""
+        """Create all tables if they do not exist, then run migrations."""
         if not self.conn:
             raise RuntimeError("Database not connected. Call connect() first.")
 
@@ -155,6 +155,7 @@ class Database:
             );
         """)
         self.conn.commit()
+        self.migrate_schema()
 
     def migrate_schema(self):
         """Run idempotent migrations for schema upgrades (v0.2 → v0.3, etc.)."""
@@ -192,6 +193,8 @@ class Database:
             "outfit_tag TEXT DEFAULT NULL,"
             "UNIQUE(shot_id, character_id)"
             ")",
+            # v0.13: time-segmented shot data (industry standard format)
+            "ALTER TABLE storyboard_shot ADD COLUMN segments_json TEXT DEFAULT '[]'",
             # v0.9: character_outfit table (IF NOT EXISTS handled by init_schema)
             "CREATE TABLE IF NOT EXISTS character_outfit ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -275,20 +278,39 @@ class Database:
     ) -> list[int]:
         ids = []
         for shot in shots:
+            # Serialize segments for industry-standard prompt building
+            segments = shot.get("segments", [])
+            segments_json_str = json.dumps(segments, ensure_ascii=False)
+
+            # Backward-compat fields derived from segments
+            narration = shot.get("narration", "")
+            if not narration and segments:
+                narration = " ".join(s.get("action", "") for s in segments)
+            dialogue = shot.get("dialogue", "")
+            if not dialogue and segments:
+                dialogue_parts = []
+                for s in segments:
+                    d = s.get("dialogue")
+                    if d:
+                        dialogue_parts.append(d)
+                dialogue = "\n".join(dialogue_parts)
+
             cursor = self.conn.execute(
                 """INSERT INTO storyboard_shot
                    (script_id, shot_num, narration, dialogue,
-                    camera_movement, duration_sec, char_ids, scene_id, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'done')""",
+                    camera_movement, duration_sec, char_ids, scene_id,
+                    segments_json, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'done')""",
                 (
                     script_id,
                     shot["shot_num"],
-                    shot.get("narration", ""),
-                    shot.get("dialogue", ""),
-                    shot.get("camera_movement", "static"),
-                    shot.get("duration_sec", 8.0),
+                    narration,
+                    dialogue,
+                    shot.get("camera_movement", "MS"),
+                    shot.get("duration_sec", 10.0),
                     json.dumps(shot.get("char_ids", []), ensure_ascii=False),
                     shot.get("scene_id"),
+                    segments_json_str,
                 ),
             )
             ids.append(cursor.lastrowid)

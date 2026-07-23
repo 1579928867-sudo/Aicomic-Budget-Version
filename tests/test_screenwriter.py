@@ -34,7 +34,7 @@ class FakeLLMClient:
 
 
 def _make_canned_storyboard() -> dict:
-    """Canned storyboard output with merged shots."""
+    """Canned storyboard output — v0.13 industry format with time segments."""
     return {
         "scenes": [
             {
@@ -44,25 +44,73 @@ def _make_canned_storyboard() -> dict:
                     {
                         "shot_num": 1,
                         "shot_type": "both",
-                        "duration_sec": 8.0,
+                        "duration_sec": 10.0,
                         "characters": [
                             {"name": "张三", "variant": "default"},
                             {"name": "李四", "variant": "default"},
                         ],
                         "scene_name": "大殿",
-                        "narration": "张三缓步走入大殿，环顾四周。李四从宝座上站起。",
-                        "dialogue": "张三: 终于到了。\n李四: 你来了。",
-                        "camera_movement": "LS→MS",
+                        "segments": [
+                            {
+                                "time_range": "0-3秒",
+                                "camera": "全景",
+                                "action": "张三缓步走入大殿，环顾四周。",
+                                "dialogue": "张三（感慨，音色：清朗少年）: 终于到了。",
+                                "sound": "脚步声回荡",
+                                "transition": None,
+                            },
+                            {
+                                "time_range": "3-7秒",
+                                "camera": "中景",
+                                "action": "李四从宝座上站起，面带微笑。",
+                                "dialogue": "李四（平静，音色：威严老者）: 你来了。",
+                                "sound": "衣物摩擦声",
+                                "transition": "延续中景，李四起身面向张三",
+                            },
+                            {
+                                "time_range": "7-10秒",
+                                "camera": "近景",
+                                "action": "张三抬头望向李四，眼神坚定。",
+                                "dialogue": None,
+                                "sound": "静谧中的呼吸声",
+                                "transition": "衔接镜头2的0-3秒：张三立于殿中，抬头望向宝座上的李四",
+                            },
+                        ],
+                        "scene_summary": "场景：仙侠大殿，宏伟庄严，光线幽暗。（视频不要添加字幕）",
                     },
                     {
                         "shot_num": 2,
                         "shot_type": "dialogue",
-                        "duration_sec": 6.0,
+                        "duration_sec": 8.0,
                         "characters": [{"name": "张三", "variant": "default"}],
                         "scene_name": "大殿",
-                        "narration": "张三抬头望向李四。",
-                        "dialogue": "张三: 这里就是传说中的圣地...",
-                        "camera_movement": "CU",
+                        "segments": [
+                            {
+                                "time_range": "0-3秒",
+                                "camera": "近景",
+                                "action": "张三立于殿中，抬头望向宝座上的李四，眼神坚定。",
+                                "dialogue": "张三（深沉，音色：清朗少年）: 这里就是传说中的圣地...",
+                                "sound": "静谧中的呼吸声",
+                                "transition": None,
+                            },
+                            {
+                                "time_range": "3-7秒",
+                                "camera": "中景",
+                                "action": "张三向前迈出一步，双手抱拳行礼。",
+                                "dialogue": None,
+                                "sound": "脚步声，衣物摩擦声",
+                                "transition": "延续中景，张三抱拳行礼",
+                            },
+                            {
+                                "time_range": "7-10秒",
+                                "camera": "全景",
+                                "action": "大殿全景，张三站在殿中，李四端坐宝座之上，气氛庄严。",
+                                "dialogue": None,
+                                "sound": "钟声回荡",
+                                "transition": None,
+                            },
+                        ],
+                        "scene_summary": "场景：仙侠大殿，宏伟庄严，光线幽暗。（视频不要添加字幕）",
                     },
                 ],
             }
@@ -116,6 +164,7 @@ def make_db():
     db = Database(db_path)
     db.connect()
     db.init_schema()
+    db.migrate_schema()
     return db, db_path
 
 
@@ -166,10 +215,13 @@ def test_storyboard_execute_success():
         shots = db.get_storyboard_shots(script_id)
         assert len(shots) == 2
         assert shots[0]["shot_num"] == 1
-        assert "张三: 终于到了。" in shots[0]["dialogue"]
+        assert len(shots[0]["dialogue"]) > 0  # dialogue derived from segments
 
-        # Verify merged shot camera has "→" notation
-        assert "→" in shots[0]["camera_movement"]
+        # Verify v0.13+ segments are stored
+        import json
+        segs1 = json.loads(shots[0].get("segments_json", "[]"))
+        assert len(segs1) == 3
+        assert segs1[0]["time_range"] == "0-3秒"
 
         # Verify agent status was set
         status = db.get_agent_status("storyboard-agent", chapter_id)

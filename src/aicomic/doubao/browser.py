@@ -816,7 +816,7 @@ class DoubaoBrowserClient:
                     page.keyboard.press("Enter")
                 time.sleep(2.0)
 
-                # ── 8. Poll for completion (network-first, DOM-fallback) ──
+                # ── 8. Poll for completion — wait for actual video, not app buttons ──
                 start = time.time()
                 found_content = False
                 content_type = "UNKNOWN"
@@ -830,29 +830,21 @@ class DoubaoBrowserClient:
                         content_type = "VIDEO"
                         print(f"    [Doubao] ✓ 网络拦截到视频URL ({len(captured_video_urls)}个)")
                         if int(elapsed) < 20:
-                            # Give player a moment to finish loading before downloading
                             time.sleep(5)
                         break
 
-                    # DOM-based detection (fallback)
+                    # DOM-based detection: ONLY player/seedance elements
+                    # (DO NOT use text/icon-based DOWNLOAD_BTN — false positive
+                    # from app chrome like "下载电脑版")
                     has_content = page.evaluate("""() => {
-                        const v = document.querySelector('video');
-                        if (v && (v.src || v.querySelector('source'))) return 'VIDEO';
-                        const btns = document.querySelectorAll(
-                            'button, [role="button"], a, div[class*="download"]');
-                        for (const b of btns) {
-                            const t = (b.textContent || '').trim();
-                            if (t.includes('下载') || t.includes('Download')) return 'DOWNLOAD_BTN';
-                        }
+                        // Only player/seedance/video-card — ignore app-nav buttons
                         const player = document.querySelector(
                             '[class*="video-player"], [class*="player-wrapper"], '
-                            + '[class*="seedance"], [class*="generated-video"]');
+                            + '[class*="seedance"], [class*="generated-video"], '
+                            + '[class*="video-card"], [class*="VideoCard"], '
+                            + '[class*="result-video"], [class*="output-video"], '
+                            + 'video[src]:not([src=""])');
                         if (player) return 'PLAYER';
-                        // Image detection
-                        const imgs = document.querySelectorAll(
-                            'img[src*="doubao"], [class*="image-result"], '
-                            + '[class*="gallery"], [class*="generated"]');
-                        if (imgs.length >= 4) return 'IMAGE';
                         return null;
                     }""")
                     if has_content:
@@ -947,102 +939,74 @@ class DoubaoBrowserClient:
                 print(f"    [Doubao] 等待播放器就绪...")
                 time.sleep(5.0)
 
-                # ── 9. Download: bottom-left download button on video card ──
-                # After generation, each video card has a download button at its
-                # bottom-left corner. Click it directly — no overlay needed.
+                # ── 9. Download: use network-captured URLs (most reliable) ──
                 downloaded: list[str] = []
 
-                # 9a. Primary: find download btn inside/near video cards
-                # The button is positioned at the bottom-left of generated video frames
-                dl_btn = page.evaluate("""() => {
-                    // Strategy 1: buttons with download SVG/icons inside media containers
-                    for (const container of document.querySelectorAll(
-                        '[class*="video"], [class*="media"], [class*="result"], '
-                        + '[class*="card"], [class*="item"], [class*="generated"]')) {
-                        const btns = container.querySelectorAll(
-                            'button, [role="button"], [class*="download"], '
-                            + '[class*="save"], [class*="action"]');
-                        for (const btn of btns) {
-                            const t = (btn.textContent || '').trim();
-                            const aria = (btn.getAttribute('aria-label') || '').trim();
-                            if (['下载', '保存', 'Download', 'Save'].includes(t)
-                                || ['下载', '保存', 'Download', 'Save'].includes(aria)) {
-                                btn.click();
-                                return 'container-btn:' + (t || aria);
-                            }
-                        }
-                    }
-                    // Strategy 2: any button/icon at bottom-left area of page
-                    for (const btn of document.querySelectorAll(
-                        'button, [role="button"], svg')) {
-                        const t = (btn.textContent || btn.getAttribute('aria-label') || '').trim();
-                        if (['下载', 'Download', '保存', 'Save'].includes(t)) {
-                            btn.click();
-                            return 'text-match:' + t;
-                        }
-                    }
-                    // Strategy 3: click download by aria-label
-                    for (const el of document.querySelectorAll('[aria-label]')) {
-                        const a = el.getAttribute('aria-label') || '';
-                        if (a === '下载' || a === 'Download' || a === '保存' || a === 'Save') {
-                            el.click();
-                            return 'aria:' + a;
-                        }
-                    }
-                    return null;
-                }""")
-                if dl_btn:
-                    print(f"    [Doubao] 找到下载按钮: {dl_btn}")
-                    time.sleep(2.5)
+                # First, give the player a moment to load and stream video
+                time.sleep(5.0)
 
-                # 9c. Check Playwright download listener
-                if download_future:
+                # 9a. Network-captured URLs — fetch via browser (has cookies)
+                if captured_video_urls:
+                    print(f"    [Doubao] 网络URL下载({len(captured_video_urls)}个)...")
+                    import base64
+                    for i, vurl in enumerate(captured_video_urls):
+                        try:
+                            data = page.evaluate("""async (url) => {
+                                const r = await fetch(url, {credentials: 'include'});
+                                if (!r.ok) return null;
+                                const blob = await r.blob();
+                                if (blob.size < 50000) return null;
+                                const buf = await blob.arrayBuffer();
+                                const bytes = new Uint8Array(buf);
+                                let bin = '';
+                                for (let i = 0; i < bytes.length; i++)
+                                    bin += String.fromCharCode(bytes[i]);
+                                return {base64: btoa(bin), size: bytes.length};
+                            }""", vurl)
+                            if data and data.get("base64"):
+                                raw = base64.b64decode(data["base64"])
+                                save_path = str(video_dir / f"doubao_{vid_id}.mp4")
+                                with open(save_path, "wb") as f:
+                                    f.write(raw)
+                                size_mb = len(raw) / (1024 * 1024)
+                                print(f"    [Doubao] ✓ 网络URL({size_mb:.1f}MB): {Path(save_path).name}")
+                                downloaded.append(save_path)
+                        except Exception as e:
+                            print(f"    [Doubao] ✗ 网络URL #{i}: {e}")
+
+                # 9b. Try Playwright download listener (for button-click triggered downloads)
+                if not downloaded and download_future:
                     dl = download_future[0]
                     save_path = str(video_dir / f"doubao_{vid_id}.mp4")
                     dl.save_as(save_path)
                     print(f"    [Doubao] ✓ 浏览器下载事件: {Path(save_path).name}")
                     downloaded.append(save_path)
 
-                # 9d. Try network-captured URLs as fallback
-                if not downloaded and captured_video_urls:
-                    print(f"    [Doubao] 网络URL下载({len(captured_video_urls)}个)...")
-                    for i, vurl in enumerate(captured_video_urls):
-                        result_path = self._download_video_url(page, vurl, video_dir, i)
-                        if result_path:
-                            print(f"    [Doubao] ✓ 网络URL: {Path(result_path).name}")
-                            downloaded.append(result_path)
-
-                # 9e. Blob URL HTML scan as last resort
+                # 9c. Try clicking download icon on video card (may work if in light DOM)
                 if not downloaded:
-                    import re
-                    html = page.content()
-                    blob_urls = set(re.findall(r'blob:https?://[^\s"\'<>]+', html))
-                    if blob_urls:
-                        print(f"    [Doubao] HTML blob扫描({len(blob_urls)}个)...")
-                        for i, burl in enumerate(blob_urls):
-                            blob_data = page.evaluate("""async (url) => {
-                                try {
-                                    const resp = await fetch(url);
-                                    const blob = await resp.blob();
-                                    if (blob.size < 50000) return {skip: true};
-                                    const buffer = await blob.arrayBuffer();
-                                    const bytes = new Uint8Array(buffer);
-                                    let binary = '';
-                                    for (let i = 0; i < bytes.length; i++)
-                                        binary += String.fromCharCode(bytes[i]);
-                                    return { base64: btoa(binary), size: bytes.length,
-                                             type: blob.type };
-                                } catch(e) { return {error: e.message}; }
-                            }""", burl)
-                            if blob_data and blob_data.get("base64"):
-                                raw = base64.b64decode(blob_data["base64"])
-                                save_path = str(video_dir / f"doubao_{vid_id}_{i}.mp4")
-                                with open(save_path, "wb") as f:
-                                    f.write(raw)
-                                print(f"    [Doubao] ✓ blob({len(raw)//1024}KB): {Path(save_path).name}")
-                                downloaded.append(save_path)
+                    dl_btn = page.evaluate("""() => {
+                        for (const btn of document.querySelectorAll('button, [role="button"]')) {
+                            const img = btn.querySelector('img[src*="download" i]');
+                            if (img && !btn.closest('[class*="header" i]')
+                                && !btn.closest('[class*="nav" i]')
+                                && !btn.closest('[class*="sidebar" i]')) {
+                                btn.click();
+                                return 'icon:' + img.getAttribute('src').substring(0,60);
+                            }
+                        }
+                        return null;
+                    }""")
+                    if dl_btn:
+                        print(f"    [Doubao] 下载按钮: {dl_btn}")
+                        time.sleep(5.0)
+                        if download_future:
+                            dl = download_future[0]
+                            save_path = str(video_dir / f"doubao_{vid_id}.mp4")
+                            dl.save_as(save_path)
+                            print(f"    [Doubao] ✓ 按钮触发下载: {Path(save_path).name}")
+                            downloaded.append(save_path)
 
-                # 9f. Legacy fallback: DOM scan for mp4 URLs + debug on failure
+                # 9e. Legacy fallback: DOM scan for mp4 URLs + debug on failure
                 if not downloaded:
                     try:
                         import re
@@ -1071,7 +1035,6 @@ class DoubaoBrowserClient:
                         with open(fail_html, "w", encoding="utf-8") as f:
                             f.write(page.content())
                         print(f"    [Doubao] ⚠ 下载失败，已保存截图: {Path(fail_png).name}")
-                        # Extract any media-like URLs for manual inspection
                         import re
                         all_urls = re.findall(
                             r'https?://[^"\'\\s<>]+', page.content()
