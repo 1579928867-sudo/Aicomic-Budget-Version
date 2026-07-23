@@ -59,27 +59,17 @@ def resolve_reference_images(db: Database, shot: dict, script_id: int) -> list[s
         char_ids = []
 
     for char_id in char_ids:
-        variant_name = char_variant.get(char_id, "default")
+        # v0.12: Use character_outfit (design sheet) instead of deprecated appearance_variant
         row = db.conn.execute(
-            """SELECT three_view_image, face_closeup_image FROM appearance_variant
-               WHERE character_id = ? AND variant_name = ? AND three_view_image != ''
-               LIMIT 1""",
-            (char_id, variant_name),
+            """SELECT image_path FROM character_outfit
+               WHERE character_id = ? AND image_path != ''
+               ORDER BY is_default DESC LIMIT 1""",
+            (char_id,),
         ).fetchone()
-        if not row:
-            row = db.conn.execute(
-                """SELECT three_view_image, face_closeup_image FROM appearance_variant
-                   WHERE character_id = ? AND three_view_image != ''
-                   ORDER BY type = 'default' DESC LIMIT 1""",
-                (char_id,),
-            ).fetchone()
         if row:
-            face = row["face_closeup_image"] or ""
-            if face and Path(face).exists():
-                images.append(face)
-            tv = row["three_view_image"] or ""
-            if tv and Path(tv).exists():
-                images.append(tv)
+            img = row["image_path"]
+            if img and Path(img).exists():
+                images.append(img)
 
     scene_id = shot.get("scene_id")
     if scene_id:

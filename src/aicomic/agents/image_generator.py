@@ -173,6 +173,9 @@ class ImageGeneratorAgent(AgentInterface):
         if existing_status == "done":
             db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
             return AgentResult(success=True, data={"status": "skipped"})
+        if existing_status == "partial":
+            db.log(self.agent_name, chapter_id, "resuming",
+                   {"reason": "partial completion, retrying failed entities"})
 
         # ── Mark running ──
         db.set_agent_status(self.agent_name, chapter_id, "running")
@@ -258,18 +261,30 @@ class ImageGeneratorAgent(AgentInterface):
 
             images_generated = outfits_processed + scenes_processed
             had_pending = bool(outfits) or bool(scenes)
+            # Check if any entities failed (partial success)
+            failed_outfits = len(outfits) - outfits_processed
+            failed_scenes = len(scenes) - scenes_processed
+            all_succeeded = (failed_outfits == 0 and failed_scenes == 0)
 
             if images_generated > 0:
-                db.set_agent_status(self.agent_name, chapter_id, "done")
-                db.log(self.agent_name, chapter_id, "completed", {
+                final_status = "done" if all_succeeded else "partial"
+                db.set_agent_status(self.agent_name, chapter_id, final_status)
+                db.log(self.agent_name, chapter_id,
+                       "completed" if all_succeeded else "partial", {
                     "images_generated": images_generated,
                     "outfits_processed": outfits_processed,
                     "scenes_processed": scenes_processed,
+                    "failed_outfits": failed_outfits,
+                    "failed_scenes": failed_scenes,
+                    "status": final_status,
                 })
                 return AgentResult(success=True, data={
                     "images_generated": images_generated,
                     "outfits_processed": outfits_processed,
                     "scenes_processed": scenes_processed,
+                    "failed_outfits": failed_outfits,
+                    "failed_scenes": failed_scenes,
+                    "status": final_status,
                 })
             elif had_pending:
                 db.set_agent_status(self.agent_name, chapter_id, "failed")

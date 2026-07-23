@@ -10,10 +10,6 @@ import sqlite3
 class Database:
     """SQLite-backed knowledge base for the multi-agent framework."""
 
-    # ── Whitelists for view parameters ──
-    _ALLOWED_APPEARANCE_IMAGE_VIEWS = {"front", "side", "back"}
-    _ALLOWED_SCENE_IMAGE_VIEWS = {"wide", "mid", "close"}
-
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
@@ -111,6 +107,14 @@ class Database:
                 UNIQUE(character_id, tag)
             );
 
+            CREATE TABLE IF NOT EXISTS shot_character_outfit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shot_id INTEGER NOT NULL REFERENCES storyboard_shot(id),
+                character_id INTEGER NOT NULL REFERENCES character_card(id),
+                outfit_tag TEXT DEFAULT NULL,
+                UNIQUE(shot_id, character_id)
+            );
+
             CREATE TABLE IF NOT EXISTS scene_card (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -178,8 +182,16 @@ class Database:
             # v0.8: face closeup for face-consistent three-view generation
             "ALTER TABLE appearance_variant ADD COLUMN face_closeup_prompt TEXT DEFAULT ''",
             "ALTER TABLE appearance_variant ADD COLUMN face_closeup_image TEXT DEFAULT ''",
-            # v0.9: outfit_tag for character outfit system
+            # v0.9: outfit_tag for character outfit system (deprecated in v0.12)
             "ALTER TABLE storyboard_shot ADD COLUMN outfit_tag TEXT DEFAULT NULL",
+            # v0.12: per-character outfit mapping (replaces storyboard_shot.outfit_tag)
+            "CREATE TABLE IF NOT EXISTS shot_character_outfit ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "shot_id INTEGER NOT NULL REFERENCES storyboard_shot(id),"
+            "character_id INTEGER NOT NULL REFERENCES character_card(id),"
+            "outfit_tag TEXT DEFAULT NULL,"
+            "UNIQUE(shot_id, character_id)"
+            ")",
             # v0.9: character_outfit table (IF NOT EXISTS handled by init_schema)
             "CREATE TABLE IF NOT EXISTS character_outfit ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -406,108 +418,6 @@ class Database:
             return None
         return dict(row)
 
-    # ── Appearance Variants ──
-
-    def get_character_variants(self, character_id: int) -> list[dict]:
-        """Get all existing appearance variants for a character."""
-        rows = self.conn.execute(
-            """SELECT * FROM appearance_variant
-               WHERE character_id = ? ORDER BY id""",
-            (character_id,),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def create_appearance_variant(
-        self,
-        character_id: int,
-        variant_name: str,
-        variant_type: str,
-        appearance_json: str,
-    ) -> int:
-        """Create an appearance_variant row. Returns the new variant id."""
-        cursor = self.conn.execute(
-            """INSERT INTO appearance_variant
-               (character_id, variant_name, type, appearance_json, status)
-               VALUES (?, ?, ?, ?, 'done')""",
-            (character_id, variant_name, variant_type, appearance_json),
-        )
-        self.conn.commit()
-        return cursor.lastrowid
-
-    def update_appearance_variant_views(
-        self, variant_id: int, front: str, side: str, back: str
-    ):
-        """Update front/side/back view prompts on an appearance variant."""
-        self.conn.execute(
-            """UPDATE appearance_variant
-               SET front_view = ?, side_view = ?, back_view = ?
-               WHERE id = ?""",
-            (front, side, back, variant_id),
-        )
-        self.conn.commit()
-
-    def update_appearance_variant_three_view_prompt(
-        self, variant_id: int, prompt: str
-    ):
-        """Update three_view_prompt column on an appearance_variant."""
-        self.conn.execute(
-            "UPDATE appearance_variant SET three_view_prompt = ? WHERE id = ?",
-            (prompt, variant_id),
-        )
-        self.conn.commit()
-
-    def update_appearance_variant_image(
-        self, variant_id: int, view: str, file_path: str
-    ):
-        """Update {view}_image column on an appearance_variant (front/side/back)."""
-        if view not in self._ALLOWED_APPEARANCE_IMAGE_VIEWS:
-            raise ValueError(
-                f"Invalid view '{view}' for appearance_variant; "
-                f"expected one of {self._ALLOWED_APPEARANCE_IMAGE_VIEWS}"
-            )
-        column = f"{view}_image"
-        self.conn.execute(
-            f"UPDATE appearance_variant SET {column} = ? WHERE id = ?",
-            (file_path, variant_id),
-        )
-        self.conn.commit()
-
-    def update_appearance_variant_three_view(
-        self, variant_id: int, file_path: str
-    ):
-        """Update three_view_image column on an appearance_variant."""
-        self.conn.execute(
-            "UPDATE appearance_variant SET three_view_image = ? WHERE id = ?",
-            (file_path, variant_id),
-        )
-        self.conn.commit()
-
-    def update_appearance_variant_face_closeup(
-        self, variant_id: int, file_path: str
-    ):
-        """Update face_closeup_image column on an appearance_variant."""
-        self.conn.execute(
-            "UPDATE appearance_variant SET face_closeup_image = ? WHERE id = ?",
-            (file_path, variant_id),
-        )
-        self.conn.commit()
-
-    def update_scene_card_image(
-        self, scene_id: int, view: str, file_path: str
-    ):
-        """Update {view}_image column on a scene_card (wide/mid/close)."""
-        if view not in self._ALLOWED_SCENE_IMAGE_VIEWS:
-            raise ValueError(
-                f"Invalid view '{view}' for scene_card; "
-                f"expected one of {self._ALLOWED_SCENE_IMAGE_VIEWS}"
-            )
-        column = f"{view}_image"
-        self.conn.execute(
-            f"UPDATE scene_card SET {column} = ? WHERE id = ?",
-            (file_path, scene_id),
-        )
-        self.conn.commit()
-
     def update_scene_card_multi_view(self, scene_id: int, file_path: str):
         """Update multi_view_image column on a scene_card."""
         self.conn.execute(
@@ -516,15 +426,7 @@ class Database:
         )
         self.conn.commit()
 
-    def set_character_default_look(self, character_id: int, variant_id: int):
-        """Set the default_look_id on a character_card."""
-        self.conn.execute(
-            "UPDATE character_card SET default_look_id = ? WHERE id = ?",
-            (variant_id, character_id),
-        )
-        self.conn.commit()
-
-    # ── Character Outfits (v0.9) ──
+    # ── Character Outfits (v0.9+) ──
 
     def create_character_outfit(
         self,
@@ -600,8 +502,35 @@ class Database:
         )
         self.conn.commit()
 
+    def set_shot_character_outfit(
+        self, shot_id: int, character_id: int, outfit_tag: str | None
+    ):
+        """Set per-character outfit tag for a shot (v0.12 junction table).
+
+        Replaces the deprecated storyboard_shot.outfit_tag TEXT column.
+        One row per (shot, character) pair — no more last-wins conflicts.
+        """
+        self.conn.execute(
+            """INSERT OR REPLACE INTO shot_character_outfit
+               (shot_id, character_id, outfit_tag)
+               VALUES (?, ?, ?)""",
+            (shot_id, character_id, outfit_tag),
+        )
+        self.conn.commit()
+
+    def get_shot_character_outfits(
+        self, shot_id: int
+    ) -> dict[int, str | None]:
+        """Get {character_id: outfit_tag} mapping for a shot."""
+        rows = self.conn.execute(
+            "SELECT character_id, outfit_tag FROM shot_character_outfit WHERE shot_id = ?",
+            (shot_id,),
+        ).fetchall()
+        return {r["character_id"]: r["outfit_tag"] for r in rows}
+
+    # ── Deprecated (v0.9 single-column outfit_tag) ──
     def update_shot_outfit_tag(self, shot_id: int, outfit_tag: str | None):
-        """Update outfit_tag on a storyboard_shot."""
+        """DEPRECATED: use set_shot_character_outfit() per character instead."""
         self.conn.execute(
             "UPDATE storyboard_shot SET outfit_tag = ? WHERE id = ?",
             (outfit_tag, shot_id),

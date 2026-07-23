@@ -44,10 +44,11 @@ class Orchestrator:
         """
         count = 0
         # Count character_outfit images linked to this chapter's characters
+        # via the shot_character_outfit junction table (v0.12)
         rows = self.db.conn.execute("""
             SELECT co.image_path FROM character_outfit co
-            JOIN storyboard_character sc ON sc.character_id = co.character_id
-            JOIN storyboard_shot ss ON ss.id = sc.shot_id
+            JOIN shot_character_outfit sco ON sco.character_id = co.character_id
+            JOIN storyboard_shot ss ON ss.id = sco.shot_id
             JOIN script s ON s.id = ss.script_id
             WHERE s.chapter_id = ?
         """, (chapter_id,)).fetchall()
@@ -279,8 +280,17 @@ class Orchestrator:
                     # Agent skipped via idempotency — trust that images exist
                     print(f"  ✓ Image Generator: 已跳过 (图片已存在)")
                 elif imgs > 0:
+                    partial_warn = ""
+                    is_partial = (img_result.data or {}).get("status") == "partial"
+                    if is_partial:
+                        failed_o = img_result.data.get("failed_outfits", 0)
+                        failed_s = img_result.data.get("failed_scenes", 0)
+                        parts = []
+                        if failed_o: parts.append(f"{failed_o}角色")
+                        if failed_s: parts.append(f"{failed_s}场景")
+                        partial_warn = f" ⚠ 部分失败({','.join(parts)})，续跑可补"
                     print(f"  ✓ Image Generator: {imgs} 张图片 "
-                          f"({outfits_p} 角色设定图, {scenes_p} 场景)")
+                          f"({outfits_p} 角色设定图, {scenes_p} 场景){partial_warn}")
                 else:
                     # ── v0.10 gate: agent RAN but produced 0 images → abort ──
                     print(f"  ⚠ Image Generator: 0 张图片")

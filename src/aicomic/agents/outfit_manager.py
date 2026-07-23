@@ -255,12 +255,12 @@ class OutfitManagerAgent(AgentInterface):
         """
         if decision is None:
             current_tag = char_current_tags.get(char_id)
-            db.update_shot_outfit_tag(shot_id, current_tag)
+            db.set_shot_character_outfit(shot_id, char_id, current_tag)
             return (0, 1 if current_tag else 0)
 
         if decision.change_type == "existing":
             char_current_tags[char_id] = decision.tag
-            db.update_shot_outfit_tag(shot_id, decision.tag)
+            db.set_shot_character_outfit(shot_id, char_id, decision.tag)
             return (0, 1)
 
         # decision.change_type == "new"
@@ -282,7 +282,7 @@ class OutfitManagerAgent(AgentInterface):
             activation_condition=decision.activation_condition,
         )
         char_current_tags[char_id] = decision.tag
-        db.update_shot_outfit_tag(shot_id, decision.tag)
+        db.set_shot_character_outfit(shot_id, char_id, decision.tag)
         return (1, 1)
 
     # ── Standalone execute (runs per-chapter, pre-processes all shots) ──
@@ -342,7 +342,7 @@ class OutfitManagerAgent(AgentInterface):
 
                     # Throttle: only detect on scene transitions
                     if not is_scene_transition and current_tag is not None:
-                        db.update_shot_outfit_tag(shot_id, current_tag)
+                        db.set_shot_character_outfit(shot_id, char_id, current_tag)
                         shots_tagged += 1
                         continue
 

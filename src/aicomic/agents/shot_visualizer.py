@@ -107,49 +107,47 @@ class ShotVisualizerAgent(AgentInterface):
     def _build_reference_context(self, db: Database, script_id: int) -> dict:
         """Load all reference data from DB needed for shot visualization.
 
-        Returns a dict with character refs, scene refs, and shots.
+        v0.12: Reads from character_outfit + shot_character_outfit junction table
+        instead of the deprecated appearance_variant.
         """
         # Load storyboard shots
         shots = db.get_storyboard_shots(script_id)
         if not shots:
             raise ValueError(f"No storyboard shots found for script_id={script_id}")
 
-        # Load the full script JSON for character variant mapping
-        script_rows = db.conn.execute(
-            "SELECT raw_json FROM script WHERE id = ?", (script_id,)
-        ).fetchone()
-        if not script_rows:
-            raise ValueError(f"Script not found for id={script_id}")
-        script_json = json.loads(script_rows["raw_json"])
-
-        # Build character reference: (name, variant) → full_prompt
-        char_refs: dict[str, str] = {}
-        all_char_ids = set()
+        # Collect all character IDs across shots
+        all_char_ids: set[int] = set()
         for shot in shots:
-            char_ids = json.loads(shot.get("char_ids", "[]"))
+            char_ids_raw = shot.get("char_ids", "[]")
+            try:
+                char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
+            except (json.JSONDecodeError, TypeError):
+                char_ids = []
             all_char_ids.update(char_ids)
 
-        for char_id in all_char_ids:
-            variants = db.get_character_variants(char_id)
-            if not variants:
-                continue
+        # Build character reference from character_outfit (v0.12)
+        # Key: "{name}/{outfit_tag}", Value: outfit design_prompt
+        char_refs: dict[str, str] = {}
+        char_id_to_name: dict[int, str] = {}
 
-            # Get character name
+        for char_id in all_char_ids:
             char_rows = db.conn.execute(
                 "SELECT name FROM character_card WHERE id = ?", (char_id,)
             ).fetchone()
             if not char_rows:
                 continue
             char_name = char_rows["name"]
+            char_id_to_name[char_id] = char_name
 
-            for v in variants:
-                vd = dict(v)
-                variant_name = vd.get("variant_name", "default")
-                key = f"{char_name}/{variant_name}"
-                appearance = json.loads(vd.get("appearance_json", "{}"))
-                char_refs[key] = appearance.get("full_prompt", "")
+            # Read all outfits (prompts) for this character
+            outfits = db.get_character_outfits(char_id)
+            for outfit in outfits:
+                tag = outfit.get("tag", "默认")
+                prompt = outfit.get("prompt", "")
+                if prompt:
+                    char_refs[f"{char_name}/{tag}"] = prompt
 
-        # Build scene reference: scene_name → full_prompt
+        # Build scene reference: scene_name → composite prompt
         scene_refs: dict[str, str] = {}
         for shot in shots:
             scene_id = shot.get("scene_id")
@@ -160,46 +158,33 @@ class ShotVisualizerAgent(AgentInterface):
                 ).fetchone()
                 if scene_rows:
                     sr = dict(scene_rows)
-                    # Build a composite scene prompt without "no humans" prefix
-                    # (shots have characters in them)
                     scene_refs[sr["name"]] = (
                         f"【{sr.get('style', '')}】{sr.get('description', '')} "
                         f"光照：{sr.get('lighting', '')}"
                     )
 
-        # Build shot list with character references
-        # Map char_ids to names for each shot
-        char_id_to_name: dict[int, str] = {}
-        char_id_to_variant: dict[int, str] = {}
-        for scene in script_json.get("scenes", []):
-            for shot_data in scene.get("shots", []):
-                for char in shot_data.get("characters", []):
-                    cname = char.get("name", "")
-                    cvariant = char.get("variant", "default")
-                    # Find char_id from character_card
-                    crow = db.conn.execute(
-                        "SELECT id FROM character_card WHERE name = ?", (cname,)
-                    ).fetchone()
-                    if crow:
-                        cid = crow["id"]
-                        char_id_to_name[cid] = cname
-                        char_id_to_variant[cid] = cvariant
-
+        # Build shot list with per-character outfit tags from junction table
         simplified_shots = []
         for shot in shots:
             sd = dict(shot)
-            char_ids = json.loads(sd.get("char_ids", "[]"))
+            char_ids_raw = sd.get("char_ids", "[]")
+            try:
+                char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
+            except (json.JSONDecodeError, TypeError):
+                char_ids = []
+
+            # Per-character outfit tags (v0.12 junction table)
+            char_outfits = db.get_shot_character_outfits(sd["id"])
+
             char_keys = []
             for cid in char_ids:
                 cname = char_id_to_name.get(cid, f"char_{cid}")
-                cvariant = char_id_to_variant.get(cid, "default")
-                char_keys.append(f"{cname}/{cvariant}")
+                ctag = char_outfits.get(cid, "默认")
+                char_keys.append(f"{cname}/{ctag}")
 
             simplified_shots.append({
                 "shot_num": sd["shot_num"],
-                "scene_name": self._find_scene_name(
-                    sd.get("scene_id"), script_json
-                ),
+                "scene_name": self._find_scene_name(sd.get("scene_id"), db),
                 "narration": sd.get("narration", ""),
                 "dialogue": sd.get("dialogue", ""),
                 "camera_movement": sd.get("camera_movement", "MS"),
@@ -213,12 +198,14 @@ class ShotVisualizerAgent(AgentInterface):
         }
 
     @staticmethod
-    def _find_scene_name(scene_id, script_json: dict) -> str:
-        """Find scene name by fuzzy-matching scene_id to script JSON scenes."""
+    def _find_scene_name(scene_id, db: Database) -> str:
+        """Look up scene name from scene_card table."""
         if not scene_id:
             return "未知场景"
-        # Try to match via scene_card lookup in caller is better
-        return ""
+        row = db.conn.execute(
+            "SELECT name FROM scene_card WHERE id = ?", (scene_id,)
+        ).fetchone()
+        return row["name"] if row else "未知场景"
 
     def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
         chapter_id = input_data["chapter_id"]

@@ -32,10 +32,12 @@ def test_database_connect_and_init(db):
         "appearance_variant",
         "chapter",
         "character_card",
+        "character_outfit",
         "final_video",
         "novel",
         "scene_card",
         "script",
+        "shot_character_outfit",
         "storyboard_shot",
         "task_log",
         "video_clip",
@@ -164,35 +166,6 @@ def test_migrate_schema_adds_image_prompt_column(db):
     db.migrate_schema()
 
 
-def test_update_appearance_variant_views(db):
-    """新增方法: 回填 appearance_variant 的 front/side/back_view 列."""
-    novel_id = db.create_novel("测试", "")
-    chapter_id = db.create_chapter(novel_id, 1, "内容")
-    char_id, _ = db.get_or_create_character("叶凡")
-    variant_id = db.create_appearance_variant(
-        character_id=char_id,
-        variant_name="default",
-        variant_type="default",
-        appearance_json='{"full_prompt": "test"}',
-    )
-
-    db.update_appearance_variant_views(
-        variant_id=variant_id,
-        front="正面视图prompt",
-        side="侧面视图prompt",
-        back="背面视图prompt",
-    )
-
-    # Verify columns populated
-    row = db.conn.execute(
-        "SELECT front_view, side_view, back_view FROM appearance_variant WHERE id = ?",
-        (variant_id,),
-    ).fetchone()
-    assert row["front_view"] == "正面视图prompt"
-    assert row["side_view"] == "侧面视图prompt"
-    assert row["back_view"] == "背面视图prompt"
-
-
 def test_update_scene_card_with_views(db):
     """update_scene_card 现在接受 6 个字段，包括 wide/mid/close_view."""
     scene_id = db.get_or_create_scene("山门")
@@ -277,59 +250,3 @@ def test_migrate_schema_adds_image_columns(db):
     db.migrate_schema()
 
 
-def test_update_appearance_variant_image(db):
-    """回填 appearance_variant 的 {view}_image 列."""
-    char_id, _ = db.get_or_create_character("叶凡")
-    variant_id = db.create_appearance_variant(
-        character_id=char_id,
-        variant_name="default",
-        variant_type="default",
-        appearance_json='{"full_prompt": "test"}',
-    )
-    db.migrate_schema()
-
-    db.update_appearance_variant_image(variant_id, "front", "data/images/front_1.png")
-    db.update_appearance_variant_image(variant_id, "side", "data/images/side_1.png")
-    db.update_appearance_variant_image(variant_id, "back", "data/images/back_1.png")
-
-    row = db.conn.execute(
-        "SELECT front_image, side_image, back_image FROM appearance_variant WHERE id = ?",
-        (variant_id,),
-    ).fetchone()
-    assert row["front_image"] == "data/images/front_1.png"
-    assert row["side_image"] == "data/images/side_1.png"
-    assert row["back_image"] == "data/images/back_1.png"
-
-
-def test_update_appearance_variant_image_invalid_view(db):
-    """Invalid view name should raise ValueError."""
-    char_id, _ = db.get_or_create_character("测试")
-    variant_id = db.create_appearance_variant(
-        character_id=char_id,
-        variant_name="default",
-        variant_type="default",
-        appearance_json='{"full_prompt": "test"}',
-    )
-    db.migrate_schema()
-
-    import pytest
-    with pytest.raises(ValueError, match="Invalid view"):
-        db.update_appearance_variant_image(variant_id, "invalid", "path")
-
-
-def test_update_scene_card_image(db):
-    """回填 scene_card 的 {view}_image 列."""
-    scene_id = db.get_or_create_scene("山门")
-    db.migrate_schema()
-
-    db.update_scene_card_image(scene_id, "wide", "data/images/wide_1.png")
-    db.update_scene_card_image(scene_id, "mid", "data/images/mid_1.png")
-    db.update_scene_card_image(scene_id, "close", "data/images/close_1.png")
-
-    row = db.conn.execute(
-        "SELECT wide_image, mid_image, close_image FROM scene_card WHERE id = ?",
-        (scene_id,),
-    ).fetchone()
-    assert row["wide_image"] == "data/images/wide_1.png"
-    assert row["mid_image"] == "data/images/mid_1.png"
-    assert row["close_image"] == "data/images/close_1.png"

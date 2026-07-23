@@ -63,80 +63,6 @@ class ShotVideoGeneratorAgent(AgentInterface):
             and isinstance(input_data.get("script_id"), int)
         )
 
-    # ── Tail frame extraction (v0.10: shot-to-shot continuity) ──
-
-    @staticmethod
-    def _extract_last_frame(video_path: str) -> str | None:
-        """Extract a face-safe continuity frame from a video clip.
-
-        Extracts the last frame, then overlays a semi-transparent mosaic grid
-        on the eye region (top 15-35% of the frame). Most AI face-detection
-        models key on the eye-nose triangle — disrupting the eye region with a
-        grid pattern breaks the face signature while preserving clothing, body
-        posture, and environment continuity cues.
-
-        Returns the processed PNG path, or None on failure.
-        """
-        try:
-            from moviepy import VideoFileClip
-            from PIL import Image, ImageDraw
-        except ImportError:
-            print("    ⚠ moviepy/Pillow 未安装，跳过尾帧提取")
-            return None
-
-        try:
-            clip = VideoFileClip(video_path)
-            if clip.duration is None or clip.duration <= 0:
-                clip.close()
-                return None
-            # Grab a frame 0.1s before the end to avoid potential black frames
-            t = max(0, clip.duration - 0.1)
-            full_png = str(Path(video_path).with_suffix(".full_frame.png"))
-            clip.save_frame(full_png, t=t)
-            clip.close()
-
-            img = Image.open(full_png).convert("RGBA")
-            w, h = img.size
-
-            # ── Overlay: semi-transparent grid on the eye region ──
-            # Eye region is roughly top 15%–35% of the frame (varies by shot
-            # type; for medium shots this covers eyes while leaving forehead
-            # and lower face visible).
-            eye_top = int(h * 0.15)
-            eye_bottom = int(h * 0.35)
-            grid_spacing = 12   # pixels between grid lines
-            alpha = 80          # grid opacity (0=invisible, 255=solid)
-
-            overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(overlay)
-
-            # Horizontal lines in eye region
-            for y in range(eye_top, eye_bottom, grid_spacing):
-                draw.line([(0, y), (w, y)], fill=(255, 255, 255, alpha), width=2)
-
-            # Vertical lines in eye region
-            for x in range(0, w, grid_spacing):
-                draw.line([(x, eye_top), (x, eye_bottom)], fill=(255, 255, 255, alpha), width=2)
-
-            # Composite overlay onto the frame, then flatten to RGB
-            img = Image.alpha_composite(img, overlay)
-            img = img.convert("RGB")
-
-            cropped_path = str(Path(video_path).with_suffix(".last_frame.png"))
-            img.save(cropped_path, "PNG")
-
-            # Clean up the full frame
-            try:
-                Path(full_png).unlink()
-            except Exception:
-                pass
-
-            print(f"    🖼 尾帧已提取(眼部网格遮挡): {Path(cropped_path).name}")
-            return cropped_path
-        except Exception as e:
-            print(f"    ⚠ 尾帧提取失败: {e}")
-            return None
-
     # ── Reference image resolution ──
 
     def _resolve_reference_images(
@@ -144,8 +70,8 @@ class ShotVideoGeneratorAgent(AgentInterface):
     ) -> list[dict]:
         """Find reference images for a shot: character design sheets + scene multi-view.
 
-        v0.9: Each character contributes ONE design sheet image (from character_outfit),
-        resolved by shot.outfit_tag. No more face closeup + three-view.
+        v0.12: Each character's outfit is resolved independently via the
+        shot_character_outfit junction table — no more single-outfit_tag last-wins.
 
         Returns list of {"path": str, "label": str} — structured for prompt building.
         """
@@ -158,9 +84,11 @@ class ShotVideoGeneratorAgent(AgentInterface):
         except (json.JSONDecodeError, TypeError):
             char_ids = []
 
-        outfit_tag = shot.get("outfit_tag")  # None → default
+        # Per-character outfit tags from junction table (v0.12)
+        char_outfits = db.get_shot_character_outfits(shot["id"])
 
         for char_id in char_ids:
+            outfit_tag = char_outfits.get(char_id)  # None → default
             outfit = db.get_character_outfit(char_id, outfit_tag)
             if not outfit:
                 # Fallback: default outfit
@@ -203,19 +131,18 @@ class ShotVideoGeneratorAgent(AgentInterface):
     # ── Video prompt builder ──
 
     def _build_video_prompt(
-        self, shot: dict, ref_images: list[dict], last_frame_path: str | None = None
+        self, shot: dict, ref_images: list[dict]
     ) -> str:
         """Build the video generation prompt for a shot.
 
         Structure (proven to pass Doubao content filter):
         1. Copyright declaration
         2. "生成视频，Xs" instruction
-        3. Continuity instruction (only when last_frame_path is provided)
-        4. image_prompt + camera motion
-        5. narrative atmosphere (only if adds new info)
-        6. quality tags
-        7. Numbered reference image descriptions (matching actual images sent)
-        8. "原比例。"
+        3. image_prompt + camera motion
+        4. narrative atmosphere (only if adds new info)
+        5. quality tags
+        6. Numbered reference image descriptions (matching actual images sent)
+        7. "原比例。"
 
         Terms normalization (see _normalize_prompt_terms):
         - 曼联 → 幔帐 (Manchester United trademark → correct ancient bed curtain)
@@ -252,13 +179,6 @@ class ShotVideoGeneratorAgent(AgentInterface):
             f"{image_prompt}。",
             f"{motion}。",
         ]
-
-        # ── v0.10: Tail-frame continuity instruction ──
-        if last_frame_path:
-            parts.append(
-                "请接着上一镜头的尾帧画面继续生成，"
-                "保持人物位置、服装细节、发型、容貌、光影方向完全一致。"
-            )
 
         # Only include narration if it adds genuinely new information
         # (not already covered by image_prompt)
@@ -407,7 +327,6 @@ class ShotVideoGeneratorAgent(AgentInterface):
 
             # ── Generate per shot ──
             clips_created = 0
-            last_frame_path: str | None = None  # v0.10: continuity between shots
             for si, shot in enumerate(shots_to_generate):
                 shot_num = shot["shot_num"]
                 label = f"镜头 {shot_num} ({si+1}/{len(shots_to_generate)})"
@@ -417,15 +336,6 @@ class ShotVideoGeneratorAgent(AgentInterface):
                 self._retry_count = 0
 
                 ref_images = self._resolve_reference_images(db, shot)
-
-                # ── v0.10: Append tail frame from previous shot as continuity ref ──
-                if last_frame_path and Path(last_frame_path).exists():
-                    ref_images.append({
-                        "path": last_frame_path,
-                        "kind": "tail_frame",
-                        "label": "尾帧参考",
-                    })
-                    print(f"    🔗 尾帧参考(去人脸): {Path(last_frame_path).name}")
 
                 if not ref_images:
                     db.log(
@@ -444,15 +354,13 @@ class ShotVideoGeneratorAgent(AgentInterface):
                         kind = "角色设定图"
                     elif ri.get("kind") == "scene":
                         kind = "场景多景别"
-                    elif ri.get("kind") == "tail_frame":
-                        kind = "尾帧参考"
                     else:
                         kind = "参考图"
                     print(f"       [{kind}] {Path(path).name}")
 
                 # Build video prompt with structured ref info
                 video_prompt = self._build_video_prompt(
-                    shot, ref_images, last_frame_path=last_frame_path
+                    shot, ref_images
                 )
                 print(f"    📝 视频提示词 ({len(video_prompt)} 字)")
 
@@ -594,15 +502,6 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     clips_created += 1
                     print(f"    💾 已保存到数据库 (shot_id={shot['id']})")
 
-                    # ── v0.10: Extract tail frame for next shot's continuity ──
-                    # Clean up previous tail frame to avoid disk clutter
-                    if last_frame_path:
-                        try:
-                            Path(last_frame_path).unlink(missing_ok=True)
-                        except Exception:
-                            pass
-                    last_frame_path = self._extract_last_frame(chosen)
-
                 except Exception as e:
                     db.log(
                         self.agent_name, chapter_id, "shot_video_db_error",
@@ -610,13 +509,6 @@ class ShotVideoGeneratorAgent(AgentInterface):
                         level="ERROR",
                     )
                     print(f"    ✗ 数据库写入失败: {e}")
-
-            # ── v0.10: Clean up last tail frame (no longer needed) ──
-            if last_frame_path:
-                try:
-                    Path(last_frame_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
 
             # ── Mark status (partial if some failed, so next run can resume) ──
             failed_count = total_with_prompts - clips_created - len(already_done)
