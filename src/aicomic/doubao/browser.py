@@ -993,7 +993,7 @@ class DoubaoBrowserClient:
                             print(f"    [Doubao] ✓ 下载按钮: {Path(save_path).name}")
                             downloaded.append(save_path)
 
-                # 9d. Blob URL via in-page fetch
+                # 9d. Blob URL via in-page fetch (DOM video element)
                 if not downloaded:
                     blob_data = page.evaluate("""async () => {
                         const v = document.querySelector('video');
@@ -1018,8 +1018,45 @@ class DoubaoBrowserClient:
                         save_path = str(video_dir / f"doubao_{vid_id}{ext}")
                         with open(save_path, "wb") as f:
                             f.write(raw)
-                        print(f"    [Doubao] ✓ blob: {Path(save_path).name} ({len(raw)//1024}KB)")
+                        print(f"    [Doubao] ✓ blob(video): {Path(save_path).name} ({len(raw)//1024}KB)")
                         downloaded.append(save_path)
+
+                # 9e. Broader blob scan: search full HTML for blob: URLs
+                # Doubao's new player doesn't create <video> tags — blob URLs
+                # are embedded in script state or custom player components.
+                if not downloaded:
+                    import re
+                    html = page.content()
+                    blob_urls = set(re.findall(r'blob:https?://[^\s"\'<>]+', html))
+                    if blob_urls:
+                        print(f"    [Doubao] HTML中发现 {len(blob_urls)} 个blob URL，尝试fetch...")
+                        for i, burl in enumerate(blob_urls):
+                            blob_data = page.evaluate("""async (url) => {
+                                try {
+                                    const resp = await fetch(url);
+                                    const blob = await resp.blob();
+                                    if (blob.size < 10000) return {skip: true, reason: 'too small'};
+                                    const buffer = await blob.arrayBuffer();
+                                    const bytes = new Uint8Array(buffer);
+                                    let binary = '';
+                                    for (let i = 0; i < bytes.length; i++)
+                                        binary += String.fromCharCode(bytes[i]);
+                                    return { base64: btoa(binary), size: bytes.length,
+                                             type: blob.type };
+                                } catch(e) { return {error: e.message}; }
+                            }""", burl)
+                            if blob_data and blob_data.get("base64"):
+                                raw = base64.b64decode(blob_data["base64"])
+                                ext = ".webm" if "webm" in blob_data.get("type", "") else ".mp4"
+                                save_path = str(video_dir / f"doubao_{vid_id}_{i}{ext}")
+                                with open(save_path, "wb") as f:
+                                    f.write(raw)
+                                print(f"    [Doubao] ✓ blob(HTML扫描): {Path(save_path).name} ({len(raw)//1024}KB)")
+                                downloaded.append(save_path)
+                            elif blob_data and blob_data.get("skip"):
+                                pass  # too small, probably not a video
+                            elif blob_data and blob_data.get("error"):
+                                print(f"    [Doubao] blob fetch失败: {blob_data['error'][:80]}")
 
                 # 9e. Legacy DOM: <video src>, download links, HTML regex scan
                 if not downloaded:
