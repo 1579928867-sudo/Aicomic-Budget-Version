@@ -184,16 +184,23 @@ class VideoComposerAgent(AgentInterface):
 
         # Concatenate all processed clips
         final = concatenate_videoclips(processed)
-        final.write_videofile(
-            output_path,
-            codec="libx264",
-            audio_codec="aac",
-            fps=24,
-        )
-
-        # Clean up
-        for c in video_clips:
-            c.close()
-        final.close()
+        try:
+            final.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac",
+                fps=24,
+            )
+        finally:
+            # Clean up all clips — even if write_videofile raises
+            for c in video_clips:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            try:
+                final.close()
+            except Exception:
+                pass
 
         return output_path
