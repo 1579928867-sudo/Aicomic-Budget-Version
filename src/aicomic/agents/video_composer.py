@@ -7,7 +7,7 @@ and dialogue subtitles, add crossfade transitions, and output a final_video.
 from pathlib import Path
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
 
 
@@ -34,14 +34,9 @@ class VideoComposerAgent(AgentInterface):
         script_id = input_data["script_id"]
 
         # ── Idempotency check ──
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-
-        # ── Mark running ──
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"script_id": script_id})
+        if skip:
+            return skip
 
         try:
             # ── Load video clips ──

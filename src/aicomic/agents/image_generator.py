@@ -8,15 +8,12 @@ then saves chosen file paths back to the database.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
-from .prompt_utils import normalize_prompt_terms
+from .prompt_utils import normalize_prompt_terms, user_select_candidate
 
 
 class ImageGeneratorAgent(AgentInterface):
@@ -92,7 +89,9 @@ class ImageGeneratorAgent(AgentInterface):
                 return True
 
             # Multiple candidates — user selection
-            chosen = self._user_select_image(paths, entity_type, entity["id"])
+            chosen = user_select_candidate(
+                paths, self.interactive, f"📷 {entity_type} #{entity['id']}",
+            )
             if chosen is None:
                 return False
 
@@ -118,68 +117,15 @@ class ImageGeneratorAgent(AgentInterface):
             print(f"    [{entity_type} #{entity['id']}] ✗ 异常: {e}")
             return False
 
-    def _user_select_image(
-        self, paths: list[str], entity_type: str, entity_id: int
-    ) -> str | None:
-        """Auto-select first candidate (interactive=False) or prompt user.
-
-        Returns the chosen path, or None if user cancels.
-        """
-        if not self.interactive:
-            return paths[0]
-
-        print(f"\n  📷 {entity_type} #{entity_id} — 豆包生成了 {len(paths)} 张候选图：")
-        for i, p in enumerate(paths):
-            print(f"    [{i+1}] {Path(p).name}")
-
-        # Open images with system default viewer
-        for p in paths:
-            try:
-                if sys.platform == "win32":
-                    os.startfile(p)
-                elif sys.platform == "darwin":
-                    subprocess.run(["open", p], check=False)
-                else:
-                    subprocess.run(["xdg-open", p], check=False)
-            except Exception:
-                pass
-
-        while True:
-            try:
-                choice = input(
-                    f"  选择保留哪张？(1-{len(paths)}，回车默认选1): "
-                ).strip()
-                if choice == "":
-                    choice = "1"
-                idx = int(choice) - 1
-                if 0 <= idx < len(paths):
-                    chosen = paths[idx]
-                    print(
-                        f"  ✓ 保留 [{idx+1}] {Path(chosen).name}"
-                        f"，删除其余 {len(paths)-1} 张\n"
-                    )
-                    return chosen
-                print(f"  ⚠ 请输入 1-{len(paths)}")
-            except (ValueError, KeyboardInterrupt, EOFError):
-                print("\n  ℹ 非交互模式，自动选择第1张")
-                return paths[0]
-
     def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
         chapter_id = input_data["chapter_id"]
         script_id = input_data["script_id"]
 
         # ── Idempotency check ──
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-        if existing_status == "partial":
-            db.log(self.agent_name, chapter_id, "resuming",
-                   {"reason": "partial completion, retrying failed entities"})
-
-        # ── Mark running ──
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
+        skip = begin_agent_run(self.agent_name, chapter_id, db,
+                               {"script_id": script_id})
+        if skip:
+            return skip
 
         try:
             # ── Load outfits with pending images (prompt exists, image_path empty) ──
@@ -222,8 +168,9 @@ class ImageGeneratorAgent(AgentInterface):
                     if result.success and result.file_paths:
                         chosen = result.file_paths[0]
                         if len(result.file_paths) > 1:
-                            chosen = self._user_select_image(
-                                result.file_paths, "角色设定图", outfit["id"],
+                            chosen = user_select_candidate(
+                                result.file_paths, self.interactive,
+                                f"📷 角色设定图 #{outfit['id']}",
                             )
                         if chosen:
                             db.update_outfit_image(outfit["id"], chosen)

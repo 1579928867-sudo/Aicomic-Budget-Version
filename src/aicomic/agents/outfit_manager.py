@@ -9,11 +9,22 @@ design sheet generation on demand.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
+from .prompt_utils import parse_char_ids
+from .char_designer import CHAR_DESIGNER_SYSTEM_PROMPT
+
+# Extension for outfit variant generation — swaps clothing while keeping all else identical.
+_VARIANT_INSTRUCTION = (
+    "\n\n## Outfit Variant Mode\n"
+    "You are generating a NEW design_prompt for an existing character who has "
+    "changed clothes. CRITICAL: Keep the character's face shape, hairstyle, "
+    "body type, height ratio, and equipment/artifacts COMPLETELY UNCHANGED "
+    "from the original design. ONLY replace the clothing description. "
+    "The design_prompt must remain in the exact same game card format as above."
+)
 
 
 # ── Keywords that signal possible outfit changes ──
@@ -51,26 +62,6 @@ Return ONLY valid JSON:
 - If an EXISTING outfit matches: {"has_change": true, "tag": "宗门道袍"}
 - If a NEW outfit is needed: {"has_change": true, "tag": "宗门道袍", "clothing_desc": "白底蓝边道袍，左胸绣苍风玄府徽记...", "activation_condition": "萧澈正式加入苍风玄府后"}
 """
-
-
-# ── LLM prompt for generating new outfit design prompts ──
-OUTFIT_PROMPT_GENERATOR_SYSTEM_PROMPT = """You are a professional character designer. Generate a complete character design sheet prompt (人物设定图提示词) for a character with a new outfit.
-
-Follow this format exactly:
-【时代背景】角色名（代称），性别 年龄岁，8k 类 3D 游戏 cg 电影风格，
-包括左侧人物全身设计图含衣着细节，右侧画面三视图，同时左侧上方为人物名称，
-带一些人物简介：[角色简介]。
-画面从左到右排列三个视角：左侧为侧面全身站立（展示身体侧轮廓与服装侧面细节），
-中间为正面全身站立（正面特写，人物居中），右侧为背面全身站立（展示背面发型与服装背面设计）。
-三视图间距均匀，同一水平线对齐。
-[角色外貌与新衣着细节]
-所有画面底下可以给一套法宝细节图，[法宝描述]。
-底部标注：[outfit_tag]
-
-IMPORTANT: Keep the character's face, hairstyle, body type, and equipment/artifacts UNCHANGED. Only replace the clothing description.
-
-Return ONLY valid JSON:
-{"design_prompt": "..."}"""
 
 
 @dataclass
@@ -141,9 +132,9 @@ class OutfitManagerAgent(AgentInterface):
     ) -> str:
         """Generate a design_prompt for a new outfit via LLM.
 
-        Swaps clothing descriptions while keeping face/body/props from the
-        known character. The prompt is used by ImageGenerator to create the
-        outfit's design sheet image.
+        Uses the canonical CHAR_DESIGNER_SYSTEM_PROMPT with a variant-mode
+        instruction appended, so format changes to the main template
+        automatically propagate to outfit generation.
         """
         try:
             user_prompt = (
@@ -152,15 +143,13 @@ class OutfitManagerAgent(AgentInterface):
                 f"新服饰标签：{tag}\n"
                 f"新衣着描述：{clothing_desc}\n"
                 f"激活条件：{activation_condition}\n\n"
-                f"请生成完整的人物设定图提示词（design_prompt），格式遵循：\n"
-                f"【时代背景】角色名，性别 年龄岁，8k 类 3D 游戏 cg 电影风格，\n"
-                f"包括左侧人物全身设计图含衣着细节，右侧画面三视图...\n"
-                f"保留角色的面部特征、发型、体型、法宝装备等不变，只更换衣着描述。\n"
-                f"在底部标注：[{tag}]。\n"
+                f"请生成完整的人物设定图提示词（design_prompt），"
+                f"保持角色面部、发型、体型、法宝等不变，只更换衣着。"
+                f"在底部标注：[{tag}]。"
                 f"返回 JSON：{{\"design_prompt\": \"...\"}}"
             )
             result = self.llm.generate_json(
-                system_prompt=OUTFIT_PROMPT_GENERATOR_SYSTEM_PROMPT,
+                system_prompt=CHAR_DESIGNER_SYSTEM_PROMPT + _VARIANT_INSTRUCTION,
                 user_prompt=user_prompt,
             )
             return result.get("design_prompt", "")
@@ -297,15 +286,10 @@ class OutfitManagerAgent(AgentInterface):
         script_id = input_data["script_id"]
         self._chapter_id = chapter_id
 
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped",
-                   {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started",
-               {"script_id": script_id})
+        skip = begin_agent_run(self.agent_name, chapter_id, db,
+                               {"script_id": script_id})
+        if skip:
+            return skip
 
         try:
             shots = db.get_storyboard_shots(script_id)
@@ -327,11 +311,7 @@ class OutfitManagerAgent(AgentInterface):
                 shot_text = f"{sd.get('narration', '')} {sd.get('dialogue', '')}"
 
                 # Resolve characters in this shot
-                char_ids_raw = sd.get("char_ids", "[]")
-                try:
-                    char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
-                except (json.JSONDecodeError, TypeError):
-                    char_ids = []
+                char_ids = parse_char_ids(sd.get("char_ids"))
 
                 is_scene_transition = (prev_scene_id is not None and scene_id != prev_scene_id)
                 prev_scene_id = scene_id

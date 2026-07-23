@@ -8,7 +8,7 @@ sound cues) and designs merged camera shots (≤10s each, 5-8 total).
 import json
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
 
 STORYBOARD_SYSTEM_PROMPT = """You are a professional storyboard director (分镜导演) for Chinese short-drama (竖屏漫剧) production. Your input is a complete drama script with fine-grained beats (each beat = one micro-action or one line of dialogue). Your output is a set of merged camera shots.
@@ -142,13 +142,9 @@ class ScreenwriterAgent(AgentInterface):
         script_id = input_data["script_id"]
 
         # ── Idempotency check ──
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"script_id": script_id})
+        if skip:
+            return skip
 
         try:
             # ── Load the script from DB ──

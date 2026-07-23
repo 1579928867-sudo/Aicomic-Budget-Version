@@ -22,6 +22,41 @@ class AgentResult:
     artifacts: list[str] = field(default_factory=list)
 
 
+def begin_agent_run(
+    agent_name: str,
+    chapter_id: int,
+    db: Any,
+    extra_log: dict[str, Any] | None = None,
+) -> AgentResult | None:
+    """Shared idempotency guard for all agents.
+
+    Called at the top of every agent's execute() method to:
+    - Skip if already done (returns AgentResult for early return)
+    - Log resuming if previous run was partial
+    - Mark running and log started otherwise
+
+    Args:
+        agent_name: The agent's self.agent_name value.
+        chapter_id: Chapter being processed.
+        db: Database instance.
+        extra_log: Additional keys for the "started" log entry (e.g. {"script_id": 1}).
+
+    Returns:
+        AgentResult(status="skipped") if already done, None if should proceed.
+    """
+    status = db.get_agent_status(agent_name, chapter_id)
+    if status == "done":
+        db.log(agent_name, chapter_id, "skipped", {"reason": "already done"})
+        return AgentResult(success=True, data={"status": "skipped"})
+    if status == "partial":
+        db.log(agent_name, chapter_id, "resuming",
+               {"reason": "partial completion, retrying failed"})
+
+    db.set_agent_status(agent_name, chapter_id, "running")
+    db.log(agent_name, chapter_id, "started", extra_log or {})
+    return None
+
+
 class AgentInterface(ABC):
     """Every Agent must implement this interface.
 

@@ -144,6 +144,23 @@ class DoubaoBrowserClient:
         # Rate limiting
         self._last_call_time: float = 0.0
 
+        # Clean up old debug files (keep last 20)
+        self._trim_debug_dir()
+
+    @staticmethod
+    def _trim_debug_dir(max_files: int = 20) -> None:
+        """Delete oldest files in debug/ directory, keeping at most max_files."""
+        debug_dir = Path("data/debug")
+        if not debug_dir.is_dir():
+            return
+        files = sorted(debug_dir.iterdir(), key=lambda p: p.stat().st_mtime)
+        excess = len(files) - max_files
+        for f in files[:excess]:
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
     # ── Cookie management ──
 
     def _load_cookies(self):

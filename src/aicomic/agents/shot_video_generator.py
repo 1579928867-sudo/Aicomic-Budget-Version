@@ -17,17 +17,13 @@ same as ImageGenerator's selection flow.
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
-from .prompt_utils import normalize_prompt_terms
+from .prompt_utils import normalize_prompt_terms, parse_char_ids, user_select_candidate
 
 
 class ShotVideoGeneratorAgent(AgentInterface):
@@ -78,11 +74,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
         images: list[dict] = []
 
         # ── Character design sheet images (game card format) ──
-        char_ids_raw = shot.get("char_ids", "[]")
-        try:
-            char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
-        except (json.JSONDecodeError, TypeError):
-            char_ids = []
+        char_ids = parse_char_ids(shot.get("char_ids"))
 
         # Per-character outfit tags from junction table (v0.12)
         char_outfits = db.get_shot_character_outfits(shot["id"])
@@ -220,52 +212,6 @@ class ShotVideoGeneratorAgent(AgentInterface):
 
     # ── User selection ──
 
-    def _user_select_video(
-        self, paths: list[str], shot_num: int
-    ) -> str | None:
-        """Auto-select first candidate (interactive=False) or prompt user."""
-        if not self.interactive:
-            return paths[0]
-
-        print(f"\n  🎬 镜头 #{shot_num} — 豆包生成了 {len(paths)} 个候选视频：")
-        for i, p in enumerate(paths):
-            print(f"    [{i+1}] {Path(p).name}")
-
-        # Open with system default player
-        for p in paths:
-            try:
-                if sys.platform == "win32":
-                    os.startfile(p)
-                elif sys.platform == "darwin":
-                    subprocess.run(["open", p], check=False)
-                else:
-                    subprocess.run(["xdg-open", p], check=False)
-            except Exception:
-                pass
-
-        while True:
-            try:
-                choice = input(
-                    f"  选择保留哪个？(1-{len(paths)}，回车默认选1，输入 s 跳过): "
-                ).strip()
-                if choice.lower() == "s":
-                    print(f"  ⏭ 跳过镜头 #{shot_num}\n")
-                    return None
-                if choice == "":
-                    choice = "1"
-                idx = int(choice) - 1
-                if 0 <= idx < len(paths):
-                    chosen = paths[idx]
-                    print(
-                        f"  ✓ 保留 [{idx+1}] {Path(chosen).name}"
-                        f"，删除其余 {len(paths)-1} 个\n"
-                    )
-                    return chosen
-                print(f"  ⚠ 请输入 1-{len(paths)} 或 s 跳过")
-            except (ValueError, KeyboardInterrupt, EOFError):
-                print("\n  ℹ 非交互模式，自动选择第1张")
-                return paths[0]
-
     # ── Main execution ──
 
     def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
@@ -273,17 +219,9 @@ class ShotVideoGeneratorAgent(AgentInterface):
         script_id = input_data["script_id"]
 
         # ── Idempotency check ──
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-        if existing_status == "partial":
-            db.log(self.agent_name, chapter_id, "resuming",
-                   {"reason": "partial completion, retrying failed shots"})
-
-        # ── Mark running ──
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"script_id": script_id})
+        if skip:
+            return skip
 
         try:
             # ── Load shots with image_prompts ──
@@ -474,7 +412,10 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     chosen = paths[0]
                     print(f"    ✓ 已保存 (仅1个候选) → {Path(chosen).name}")
                 else:
-                    chosen = self._user_select_video(paths, shot_num)
+                    chosen = user_select_candidate(
+                        paths, self.interactive, f"🎬 镜头 #{shot_num}",
+                        allow_skip=True, skip_msg=f"跳过镜头 #{shot_num}",
+                    )
                     if chosen is None:
                         # Clean up all
                         for p in paths:

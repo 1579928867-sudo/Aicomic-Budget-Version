@@ -5,11 +5,11 @@ shot-specific action/dialogue/camera into ready-to-use image-gen prompts
 for each storyboard shot.
 """
 
-import json
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
+from .prompt_utils import parse_char_ids
 
 SHOT_VISUALIZER_SYSTEM_PROMPT = """You are a professional cinematographer and visual composer for Chinese comic/drama (国漫/漫剧) production. Your task is to generate detailed, image-generation-ready visual prompts for each storyboard shot by combining character reference, scene reference, and shot-specific action.
 
@@ -118,12 +118,7 @@ class ShotVisualizerAgent(AgentInterface):
         # Collect all character IDs across shots
         all_char_ids: set[int] = set()
         for shot in shots:
-            char_ids_raw = shot.get("char_ids", "[]")
-            try:
-                char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
-            except (json.JSONDecodeError, TypeError):
-                char_ids = []
-            all_char_ids.update(char_ids)
+            all_char_ids.update(parse_char_ids(shot.get("char_ids")))
 
         # Build character reference from character_outfit (v0.12)
         # Key: "{name}/{outfit_tag}", Value: outfit design_prompt
@@ -167,11 +162,7 @@ class ShotVisualizerAgent(AgentInterface):
         simplified_shots = []
         for shot in shots:
             sd = dict(shot)
-            char_ids_raw = sd.get("char_ids", "[]")
-            try:
-                char_ids = json.loads(char_ids_raw) if isinstance(char_ids_raw, str) else char_ids_raw
-            except (json.JSONDecodeError, TypeError):
-                char_ids = []
+            char_ids = parse_char_ids(sd.get("char_ids"))
 
             # Per-character outfit tags (v0.12 junction table)
             char_outfits = db.get_shot_character_outfits(sd["id"])
@@ -212,14 +203,9 @@ class ShotVisualizerAgent(AgentInterface):
         script_id = input_data["script_id"]
 
         # ── Idempotency check ──
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-
-        # ── Mark running ──
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"script_id": script_id})
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"script_id": script_id})
+        if skip:
+            return skip
 
         try:
             # ── Load reference context from DB ──

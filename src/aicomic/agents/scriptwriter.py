@@ -7,7 +7,7 @@ designs shots from this script.
 
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
 
 SCRIPTWRITER_SYSTEM_PROMPT = """You are a professional drama scriptwriter specializing in adapting Chinese web novel chapters into structured drama scripts (剧本) for AI video production. Your output will be used by a storyboard director to design camera shots.
@@ -122,13 +122,9 @@ class ScriptwriterAgent(AgentInterface):
         raw_text = input_data["raw_text"]
 
         # Idempotency check
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"chapter_id": chapter_id})
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"chapter_id": chapter_id})
+        if skip:
+            return skip
 
         try:
             script_json = self.llm.generate_json(

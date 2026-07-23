@@ -6,7 +6,7 @@ format suitable for AI image/video generation.
 
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
 
 SCENE_DESIGNER_SYSTEM_PROMPT = """You are a professional scene designer for Chinese comic/drama (国漫/漫剧) production. Your task is to generate detailed, image-generation-ready scene environment descriptions from novel text.
@@ -98,14 +98,9 @@ class SceneDesignerAgent(AgentInterface):
         scenes_list = input_data["scenes_list"]
 
         # ── Idempotency check ──
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-
-        # ── Mark running ──
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"scenes": scenes_list})
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"scenes": scenes_list})
+        if skip:
+            return skip
 
         try:
             # ── Call LLM ──

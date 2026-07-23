@@ -6,7 +6,7 @@ character design format suitable for AI image generation.
 
 from typing import Any
 
-from ..interface import AgentInterface, AgentResult
+from ..interface import AgentInterface, AgentResult, begin_agent_run
 from ..db.repository import Database
 
 CHAR_DESIGNER_SYSTEM_PROMPT = """You are a professional character designer for Chinese animation/comic production. Your task is to generate a single detailed character design sheet prompt (人物设定图提示词) for each character, in a format suitable for AI image generation.
@@ -100,14 +100,9 @@ class CharacterDesignerAgent(AgentInterface):
         characters = input_data["characters"]
 
         # ── Idempotency check ──
-        existing_status = db.get_agent_status(self.agent_name, chapter_id)
-        if existing_status == "done":
-            db.log(self.agent_name, chapter_id, "skipped", {"reason": "already done"})
-            return AgentResult(success=True, data={"status": "skipped"})
-
-        # ── Mark running ──
-        db.set_agent_status(self.agent_name, chapter_id, "running")
-        db.log(self.agent_name, chapter_id, "started", {"characters": characters})
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"characters": characters})
+        if skip:
+            return skip
 
         try:
             user_prompt = (
