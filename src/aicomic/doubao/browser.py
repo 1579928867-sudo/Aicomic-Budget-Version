@@ -784,7 +784,9 @@ class DoubaoBrowserClient:
                 start = time.time()
                 found_content = False
                 content_type = "UNKNOWN"  # Track what was generated: VIDEO, IMAGE, UNKNOWN
+                moderation_grace_period = 25  # seconds — our prompt text is still on the page
                 while time.time() - start < self.timeout_sec:
+                    elapsed = time.time() - start
                     # Check: any video element (including blob-src), player container,
                     # or download button = generation complete
                     has_content = page.evaluate("""() => {
@@ -838,33 +840,33 @@ class DoubaoBrowserClient:
                             print(f"    [Doubao] ⚠ 豆包误解意图：生成了图片而非视频")
                         break
 
-                    # ── Moderation / rejection detection ──
-                    body_text = page.inner_text("body")
-                    blocked = self._check_moderation_block(body_text)
-                    if blocked:
-                        # Save debug HTML for post-mortem analysis
-                        debug_html = str(
-                            self.output_dir / "debug"
-                            / f"doubao_moderation_{vid_id}.html"
-                        )
-                        try:
-                            Path(debug_html).parent.mkdir(parents=True, exist_ok=True)
-                            with open(debug_html, "w", encoding="utf-8") as f:
-                                f.write(page.content())
-                        except Exception:
-                            pass
-                        return ImageResult(
-                            success=False, file_path="",
-                            error=blocked["error"],
-                            metadata={
-                                "reason": blocked["reason"],
-                                "suggestion": blocked["suggestion"],
-                                "page_text": body_text[:2000],
-                                "debug_html": debug_html,
-                            },
-                        )
+                    # ── Moderation / rejection detection (skip early — our prompt text is still visible) ──
+                    if elapsed > moderation_grace_period:
+                        body_text = page.inner_text("body")
+                        blocked = self._check_moderation_block(body_text)
+                        if blocked:
+                            # Save debug HTML for post-mortem analysis
+                            debug_html = str(
+                                self.output_dir / "debug"
+                                / f"doubao_moderation_{vid_id}.html"
+                            )
+                            try:
+                                Path(debug_html).parent.mkdir(parents=True, exist_ok=True)
+                                with open(debug_html, "w", encoding="utf-8") as f:
+                                    f.write(page.content())
+                            except Exception:
+                                pass
+                            return ImageResult(
+                                success=False, file_path="",
+                                error=blocked["error"],
+                                metadata={
+                                    "reason": blocked["reason"],
+                                    "suggestion": blocked["suggestion"],
+                                    "page_text": body_text[:2000],
+                                    "debug_html": debug_html,
+                                },
+                            )
 
-                    elapsed = time.time() - start
                     if int(elapsed) % 30 == 0 and int(elapsed) > 0:
                         print(f"    [Doubao] 等待视频生成... ({int(elapsed)}s)")
 
@@ -1145,40 +1147,43 @@ class DoubaoBrowserClient:
         Returns None if no block detected, or a dict with reason + suggestion.
         """
         # ── Keyword → (reason_tag, suggestion) mappings ──
+        # IMPORTANT: keep keywords as specific multi-word phrases.
+        # Single-word keywords like "面部" or "版权" will false-positive
+        # on the prompt text we just typed (e.g. "镜头从面部近景..."
+        # and "我有版权"). Grace period handles most cases, but specific
+        # keywords reduce the risk window.
         BLOCK_RULES = [
             # Real-face / portrait rejection (most common for character refs)
             ("真实人脸", "真实人脸检测",
-             "参考图中检测到真实人脸特征 → 对参考图做眼部网格遮挡后再试"),
-            ("真人", "真人检测",
-             "参考图被判定含真人 → 降低写实度，加'二次元插画风格'限定"),
-            ("面部", "面部检测",
-             "参考图含可识别面部 → 使用眼部马赛克预处理参考图"),
-            # Copyright / infringement
-            ("侵权", "版权拦截",
-             "prompt 被判定含侵权内容 → 移除具体作品名/角色名，改用特征描述"),
-            ("版权", "版权拦截",
-             "prompt 被判定含版权内容 → 加'原创角色'声明，移除商业IP关联词"),
+             "参考图中检测到真实人脸特征 → 降低写实度"),
+            ("真人照片", "真人检测",
+             "参考图被判定含真人照片 → 降低写实度"),
+            ("面部识别", "面部识别拦截",
+             "参考图含可识别面部 → 无需调整，可直接重试"),
+            # Copyright / infringement (multi-word to avoid matching "版权" in prompt)
+            ("侵犯版权", "版权拦截",
+             "prompt 被判定含侵权内容 → 移除具体作品名"),
+            ("版权保护", "版权拦截",
+             "prompt 被判定含版权内容 → 加'原创角色'声明"),
             # Content policy violations
-            ("违规", "内容违规",
-             "prompt 触犯内容政策 → 检查是否含血腥/政治/成人暗示，改写中性描述"),
-            ("不符合", "内容不符合规范",
-             "prompt 不符合内容规范 → 简化描述，移除可能敏感的修饰语"),
-            ("无法生成", "内容拒审",
-             "豆包拒绝生成 → 缩短prompt，降低细节密度，分步请求"),
-            ("审核", "审核拦截",
-             "触发审核 → 移除'法宝''武器'等可能涉暴词汇"),
+            ("违反社区规范", "内容违规",
+             "prompt 触犯内容政策 → 检查是否含血腥/政治"),
+            ("不符合内容规范", "内容不符合规范",
+             "prompt 不符合内容规范 → 简化描述"),
+            ("无法生成该内容", "内容拒审",
+             "豆包拒绝生成 → 缩短prompt，降低细节密度"),
+            ("审核不通过", "审核拦截",
+             "触发审核 → 移除可能涉暴词汇"),
             # Sensitive imagery
-            ("裸露", "敏感图像",
+            ("包含裸露", "敏感图像",
              "含敏感图像描述 → 确保所有角色穿着完整"),
-            ("暴力", "暴力内容",
-             "含暴力描述 → 移除打斗/流血/攻击性词汇，改为中性动作"),
-            ("血腥", "血腥内容",
-             "含血腥描述 → 移除相关词，改为'激烈战斗'等抽象表述"),
+            ("包含暴力", "暴力内容",
+             "含暴力描述 → 移除打斗/流血词汇"),
+            ("包含血腥", "血腥内容",
+             "含血腥描述 → 改为抽象表述"),
             # Generic failure
-            ("生成失败", "生成失败",
-             "豆包返回生成失败 → 缩短prompt或减少参考图数量"),
-            ("请重试", "请重试",
-             "豆包建议重试 → 等待30s后重试当前prompt"),
+            ("生成失败，请稍后重试", "生成失败",
+             "豆包返回生成失败 → 缩短prompt或减少参考图"),
         ]
 
         body = body_text or ""

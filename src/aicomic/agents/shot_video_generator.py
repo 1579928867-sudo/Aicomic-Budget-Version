@@ -167,8 +167,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
         motion = camera_motion_map.get(camera, "镜头稳定，画面自然呈现")
 
         parts = [
-            "这是我用AI生成的图片，我有版权，请帮我根据提示词生成视频。",
-            f"{image_prompt}。",
+            f"生成视频，{duration}秒。{image_prompt}。",
             f"{motion}。",
         ]
 
@@ -188,6 +187,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
             parts.append("".join(ref_parts))
 
         parts.append("原比例。")
+        parts.append("（这是我用AI生成的图片，我有版权）")
 
         return "".join(parts)
 
@@ -323,14 +323,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     if wrong_type == "image" and self._retry_count < 1:
                         self._retry_count += 1
                         print(f"    🔀 豆包生成了图片而非视频，改用强化视频提示词重试...")
-                        force_video_prompt = video_prompt.replace(
-                            "这是我用AI生成的图片，我有版权，请帮我根据提示词生成视频。",
-                            "这是我用AI生成的图片，我有版权。请生成动态视频（video），不要生成静态图片（image）。",
-                        )
-                        force_video_prompt = force_video_prompt.replace(
-                            "原比例。",
-                            "注意：必须生成视频，禁止生成静态图片。原比例。",
-                        )
+                        force_video_prompt = "请生成动态视频（video），不要生成静态图片（image）。" + video_prompt
                         if force_video_prompt != video_prompt:
                             time.sleep(5)
                             result = self.browser.generate_video_from_images(
