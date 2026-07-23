@@ -947,95 +947,94 @@ class DoubaoBrowserClient:
                 print(f"    [Doubao] 等待播放器就绪...")
                 time.sleep(5.0)
 
-                # ── 9. Download: network-capture first, then DOM strategies ──
+                # ── 9. Download: click video → overlay → save button ──
+                # Correct flow: 1) click the generated video to open it in a
+                # half-page overlay, 2) find the blue "保存" button at the
+                # top-right of the overlay, 3) click it to trigger download.
                 downloaded: list[str] = []
 
-                # 9a. PRIMARY: Download video URLs captured by network interception
-                if captured_video_urls:
-                    print(f"    [Doubao] 网络拦截到 {len(captured_video_urls)} 个视频URL，开始下载...")
-                    for i, vurl in enumerate(captured_video_urls):
-                        result_path = self._download_video_url(page, vurl, video_dir, i)
-                        if result_path:
-                            print(f"    [Doubao] ✓ 网络URL下载: {Path(result_path).name}")
-                            downloaded.append(result_path)
+                # 9a. Click the generated video to open the overlay
+                # The video result is usually in a card/grid. Try multiple selectors.
+                video_clicked = page.evaluate("""() => {
+                    // Try: video player container, generated result card, or first large media element
+                    const candidates = [
+                        ...document.querySelectorAll('[class*="video"]'),
+                        ...document.querySelectorAll('[class*="player"]'),
+                        ...document.querySelectorAll('[class*="result"]'),
+                        ...document.querySelectorAll('[class*="generated"]'),
+                        ...document.querySelectorAll('video'),
+                        ...document.querySelectorAll('[class*="card"]'),
+                    ];
+                    for (const el of candidates) {
+                        if (el.tagName === 'VIDEO') { el.click(); return 'clicked-video'; }
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 200 && r.height > 150) {
+                            el.click();
+                            return 'clicked-' + (el.className || el.tagName).toString().slice(0,40);
+                        }
+                    }
+                    return null;
+                }""")
+                if video_clicked:
+                    print(f"    [Doubao] 点击视频元素: {video_clicked}")
+                    time.sleep(2.0)
+                else:
+                    # Fallback: click first visible video-size area via mouse
+                    print(f"    [Doubao] 尝试鼠标双击视频区域...")
+                    try:
+                        page.mouse.click(400, 350)  # center-ish of typical result area
+                        time.sleep(1.0)
+                    except Exception:
+                        pass
 
-                # 9b. Download captured by Playwright download listener
-                if not downloaded and download_future:
+                # 9b. Find and click the blue "保存" button in the overlay
+                save_clicked = page.evaluate("""() => {
+                    for (const el of document.querySelectorAll(
+                        'button, [role="button"], span, div')) {
+                        const t = (el.textContent || '').trim();
+                        if (t === '保存' || t === 'Save') {
+                            el.click();
+                            return 'text-match:' + t;
+                        }
+                    }
+                    return null;
+                }""")
+                if save_clicked:
+                    print(f"    [Doubao] 点击保存按钮: {save_clicked}")
+                    time.sleep(2.0)
+                else:
+                    print(f"    [Doubao] ⚠ 未找到保存按钮，尝试其他方式...")
+
+                # 9c. Check Playwright download listener
+                if download_future:
                     dl = download_future[0]
                     save_path = str(video_dir / f"doubao_{vid_id}.mp4")
                     dl.save_as(save_path)
                     print(f"    [Doubao] ✓ 浏览器下载事件: {Path(save_path).name}")
                     downloaded.append(save_path)
 
-                # 9c. Click download button
-                if not downloaded:
-                    btn_clicked = page.evaluate("""() => {
-                        const all = document.querySelectorAll(
-                            'button, [role="button"], a, div[class*="download"], '
-                            + '[class*="toolbar"] button, [class*="action"] button');
-                        for (const el of all) {
-                            const t = (el.textContent || '').trim();
-                            const aria = (el.getAttribute('aria-label') || '').trim();
-                            if (t.includes('下载') || t.includes('Download')
-                                || aria.includes('下载') || aria.includes('Download')) {
-                                el.click();
-                                return true;
-                            }
-                        }
-                        return false;
-                    }""")
-                    if btn_clicked:
-                        time.sleep(3.0)
-                        if download_future:
-                            dl = download_future[0]
-                            save_path = str(video_dir / f"doubao_{vid_id}.mp4")
-                            dl.save_as(save_path)
-                            print(f"    [Doubao] ✓ 下载按钮: {Path(save_path).name}")
-                            downloaded.append(save_path)
+                # 9d. Try network-captured URLs as fallback
+                if not downloaded and captured_video_urls:
+                    print(f"    [Doubao] 网络URL下载({len(captured_video_urls)}个)...")
+                    for i, vurl in enumerate(captured_video_urls):
+                        result_path = self._download_video_url(page, vurl, video_dir, i)
+                        if result_path:
+                            print(f"    [Doubao] ✓ 网络URL: {Path(result_path).name}")
+                            downloaded.append(result_path)
 
-                # 9d. Blob URL via in-page fetch (DOM video element)
-                if not downloaded:
-                    blob_data = page.evaluate("""async () => {
-                        const v = document.querySelector('video');
-                        if (!v) return null;
-                        const src = v.src || v.getAttribute('src') || '';
-                        if (!src || !src.startsWith('blob:')) return null;
-                        try {
-                            const resp = await fetch(src);
-                            const blob = await resp.blob();
-                            const buffer = await blob.arrayBuffer();
-                            const bytes = new Uint8Array(buffer);
-                            let binary = '';
-                            for (let i = 0; i < bytes.length; i++)
-                                binary += String.fromCharCode(bytes[i]);
-                            return { base64: btoa(binary), size: bytes.length,
-                                     type: blob.type };
-                        } catch(e) { return {error: e.message}; }
-                    }""")
-                    if blob_data and blob_data.get("base64"):
-                        raw = base64.b64decode(blob_data["base64"])
-                        ext = ".webm" if "webm" in blob_data.get("type", "") else ".mp4"
-                        save_path = str(video_dir / f"doubao_{vid_id}{ext}")
-                        with open(save_path, "wb") as f:
-                            f.write(raw)
-                        print(f"    [Doubao] ✓ blob(video): {Path(save_path).name} ({len(raw)//1024}KB)")
-                        downloaded.append(save_path)
-
-                # 9e. Broader blob scan: search full HTML for blob: URLs
-                # Doubao's new player doesn't create <video> tags — blob URLs
-                # are embedded in script state or custom player components.
+                # 9e. Blob URL HTML scan as last resort
                 if not downloaded:
                     import re
                     html = page.content()
                     blob_urls = set(re.findall(r'blob:https?://[^\s"\'<>]+', html))
                     if blob_urls:
-                        print(f"    [Doubao] HTML中发现 {len(blob_urls)} 个blob URL，尝试fetch...")
+                        print(f"    [Doubao] HTML blob扫描({len(blob_urls)}个)...")
                         for i, burl in enumerate(blob_urls):
                             blob_data = page.evaluate("""async (url) => {
                                 try {
                                     const resp = await fetch(url);
                                     const blob = await resp.blob();
-                                    if (blob.size < 10000) return {skip: true, reason: 'too small'};
+                                    if (blob.size < 50000) return {skip: true};
                                     const buffer = await blob.arrayBuffer();
                                     const bytes = new Uint8Array(buffer);
                                     let binary = '';
@@ -1047,49 +1046,26 @@ class DoubaoBrowserClient:
                             }""", burl)
                             if blob_data and blob_data.get("base64"):
                                 raw = base64.b64decode(blob_data["base64"])
-                                ext = ".webm" if "webm" in blob_data.get("type", "") else ".mp4"
-                                save_path = str(video_dir / f"doubao_{vid_id}_{i}{ext}")
+                                save_path = str(video_dir / f"doubao_{vid_id}_{i}.mp4")
                                 with open(save_path, "wb") as f:
                                     f.write(raw)
-                                print(f"    [Doubao] ✓ blob(HTML扫描): {Path(save_path).name} ({len(raw)//1024}KB)")
+                                print(f"    [Doubao] ✓ blob({len(raw)//1024}KB): {Path(save_path).name}")
                                 downloaded.append(save_path)
-                            elif blob_data and blob_data.get("skip"):
-                                pass  # too small, probably not a video
-                            elif blob_data and blob_data.get("error"):
-                                print(f"    [Doubao] blob fetch失败: {blob_data['error'][:80]}")
 
-                # 9e. Legacy DOM: <video src>, download links, HTML regex scan
-                if not downloaded:
-                    video_urls = self._find_video_urls(page)
-                    # Filter to http(s) only (not blob)
-                    http_urls = [u for u in video_urls if u.startswith("http")]
-                    for i, vurl in enumerate(http_urls):
-                        result_path = self._download_video_url(page, vurl, video_dir, i)
-                        if result_path:
-                            downloaded.append(result_path)
-
-                # 9f. Broader DOM scan: regex on full HTML for mp4 URLs
+                # 9f. Legacy fallback: DOM scan for mp4 URLs + debug on failure
                 if not downloaded:
                     try:
-                        html = page.content()
                         import re
-                        mp4_urls = re.findall(
-                            r'https?://[^"\'\\s<>]+\.(?:mp4|mov|webm)[^"\'\\s<>]*',
-                            html,
-                        )
-                        seen = set()
-                        for u in mp4_urls:
-                            if u in seen:
-                                continue
-                            seen.add(u)
+                        html = page.content()
+                        all_urls = set(re.findall(
+                            r'https?://[^"\'\\s<>]+\.(?:mp4|mov|webm)[^"\'\\s<>]*', html))
+                        for u in all_urls:
                             result_path = self._download_video_url(page, u, video_dir, len(downloaded))
                             if result_path:
-                                print(f"    [Doubao] ✓ DOM扫描下载: {Path(result_path).name}")
+                                print(f"    [Doubao] ✓ DOM扫描: {Path(result_path).name}")
                                 downloaded.append(result_path)
                     except Exception:
                         pass
-
-                # 8f. Debug: save screenshot + DOM sample on download failure
                 if not downloaded:
                     fail_png = str(
                         self.output_dir / "debug"
