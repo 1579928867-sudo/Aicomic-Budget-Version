@@ -919,8 +919,9 @@ class DoubaoBrowserClient:
                         },
                     )
 
-                # Small wait for DOM to settle after video appears
-                time.sleep(2.0)
+                # Wait for DOM/Doubao player to fully settle after video appears
+                print(f"    [Doubao] 视频内容已检测到，等待播放器就绪...")
+                time.sleep(8.0)
 
                 # ── 8. Download: strategy cascade ──
                 downloaded: list[str] = []
@@ -1000,6 +1001,58 @@ class DoubaoBrowserClient:
                         result_path = self._download_video_url(page, vurl, video_dir, i)
                         if result_path:
                             downloaded.append(result_path)
+
+                # 8e. Broader scan: grep full DOM HTML for any mp4/mov URL
+                if not downloaded:
+                    try:
+                        html = page.content()
+                        import re
+                        mp4_urls = re.findall(
+                            r'https?://[^"\'\\s<>]+\.(?:mp4|mov|webm)[^"\'\\s<>]*',
+                            html,
+                        )
+                        seen = set()
+                        for u in mp4_urls:
+                            if u in seen:
+                                continue
+                            seen.add(u)
+                            result_path = self._download_video_url(page, u, video_dir, len(downloaded))
+                            if result_path:
+                                print(f"    [Doubao] ✓ DOM扫描下载: {Path(result_path).name}")
+                                downloaded.append(result_path)
+                    except Exception:
+                        pass
+
+                # 8f. Debug: save screenshot + DOM sample on download failure
+                if not downloaded:
+                    fail_png = str(
+                        self.output_dir / "debug"
+                        / f"doubao_dl_fail_{vid_id}.png"
+                    )
+                    fail_html = str(
+                        self.output_dir / "debug"
+                        / f"doubao_dl_fail_{vid_id}.html"
+                    )
+                    try:
+                        Path(fail_png).parent.mkdir(parents=True, exist_ok=True)
+                        page.screenshot(path=fail_png, full_page=True)
+                        with open(fail_html, "w", encoding="utf-8") as f:
+                            f.write(page.content())
+                        print(f"    [Doubao] ⚠ 下载失败，已保存截图: {Path(fail_png).name}")
+                        # Extract any media-like URLs for manual inspection
+                        import re
+                        all_urls = re.findall(
+                            r'https?://[^"\'\\s<>]+', page.content()
+                        )
+                        media_hits = [u for u in all_urls if any(
+                            ext in u.lower() for ext in ['.mp4', 'video', 'blob', 'media', 'stream']
+                        )]
+                        if media_hits:
+                            print(f"    [Doubao] 发现可能URL ({len(media_hits)}):")
+                            for u in media_hits[:5]:
+                                print(f"      {u[:120]}")
+                    except Exception:
+                        pass
 
                 if downloaded:
                     return ImageResult(
