@@ -69,32 +69,65 @@ class ShotVideoGeneratorAgent(AgentInterface):
         v0.12: Each character's outfit is resolved independently via the
         shot_character_outfit junction table — no more single-outfit_tag last-wins.
 
-        Returns list of {"path": str, "label": str} — structured for prompt building.
+        v0.13: Scans segments text for ALL mentioned character names (not just
+        char_ids) to avoid random character generation for off-screen/mentioned
+        characters (e.g. "听到门外的少女声音" needs 小姑妈's reference).
         """
+        import json as _json
+
         images: list[dict] = []
+        seen_char_ids: set[int] = set()
 
-        # ── Character design sheet images (game card format) ──
+        # ── Step 1: collect all character names mentioned anywhere in the shot ──
+        mentioned_names: set[str] = set()
+
+        # From char_ids
         char_ids = parse_char_ids(shot.get("char_ids"))
+        for cid in char_ids:
+            char_row = db.conn.execute(
+                "SELECT name FROM character_card WHERE id = ?", (cid,)
+            ).fetchone()
+            if char_row:
+                mentioned_names.add(char_row["name"])
 
-        # Per-character outfit tags from junction table (v0.12)
+        # From segments text (dialogue + action may reference off-screen chars)
+        segments_raw = shot.get("segments_json", "[]")
+        try:
+            segments = _json.loads(segments_raw) if isinstance(segments_raw, str) else segments_raw
+        except (_json.JSONDecodeError, TypeError):
+            segments = []
+        for seg in segments:
+            combined = (seg.get("action", "") or "") + " " + (seg.get("dialogue", "") or "")
+            # Check all known character names against this segment text
+            all_chars = db.conn.execute(
+                "SELECT id, name FROM character_card"
+            ).fetchall()
+            for cr in all_chars:
+                if cr["name"] in combined:
+                    mentioned_names.add(cr["name"])
+
+        # ── Step 2: resolve ALL mentioned characters to their outfit images ──
         char_outfits = db.get_shot_character_outfits(shot["id"])
+        # Build name→id map from all character cards
+        name_to_id: dict[str, int] = {}
+        all_chars = db.conn.execute(
+            "SELECT id, name FROM character_card"
+        ).fetchall()
+        for cr in all_chars:
+            name_to_id[cr["name"]] = cr["id"]
 
-        for char_id in char_ids:
-            outfit_tag = char_outfits.get(char_id)  # None → default
-            outfit = db.get_character_outfit(char_id, outfit_tag)
+        for name in mentioned_names:
+            cid = name_to_id.get(name)
+            if cid is None or cid in seen_char_ids:
+                continue
+            seen_char_ids.add(cid)
+            outfit_tag = char_outfits.get(cid)
+            outfit = db.get_character_outfit(cid, outfit_tag)
             if not outfit:
-                # Fallback: default outfit
-                outfit = db.get_character_outfit(char_id, None)
+                outfit = db.get_character_outfit(cid, None)
             if outfit:
                 img_path = outfit.get("image_path", "")
                 if img_path and Path(img_path).exists():
-                    # Fetch character name for readable label
-                    char_name = db.conn.execute(
-                        "SELECT name FROM character_card WHERE id = ?",
-                        (char_id,),
-                    ).fetchone()
-                    name = (char_name["name"] if char_name
-                            else f"角色#{char_id}")
                     tag_text = outfit.get("tag", "默认")
                     images.append({
                         "path": img_path,
@@ -102,11 +135,11 @@ class ShotVideoGeneratorAgent(AgentInterface):
                         "label": f"角色：{name}，{tag_text}",
                     })
 
-        # ── Scene multi-view image ──
+        # ── Step 3: Scene multi-view image (with real scene name from DB) ──
         scene_id = shot.get("scene_id")
         if scene_id:
             row = db.conn.execute(
-                "SELECT multi_view_image FROM scene_card WHERE id = ? AND multi_view_image != ''",
+                "SELECT name, multi_view_image FROM scene_card WHERE id = ? AND multi_view_image != ''",
                 (scene_id,),
             ).fetchone()
             if row and row["multi_view_image"]:
@@ -115,60 +148,142 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     images.append({
                         "path": path,
                         "kind": "scene",
-                        "label": "场景多景别参考图",
+                        "label": f"场景多景别：{row['name']}",
                     })
 
         return images
 
     # ── Video prompt builder ──
 
+    @staticmethod
+    def _clean_dialogue(dialogue: str) -> str:
+        """Strip voice/emotion annotations from dialogue for video prompt.
+
+        Storyboard stores:  萧澈（内心，困惑，音色：清朗少年）: 怎么回事……
+        Video prompt needs: 萧澈: 怎么回事……
+
+        The annotations (内心/音色/etc) are storyboard metadata — the video
+        model may flag them as "voice actor specification" (唇形匹配审核).
+        """
+        if not dialogue:
+            return ""
+        import re
+        # Remove parenthesized annotations between speaker name and colon
+        # "萧澈（内心，困惑，音色：清朗少年）: 怎么回事…" → "萧澈：怎么回事…"
+        # Also handles half-width parens: "萧澈(内心):" → "萧澈:"
+        cleaned = re.sub(r'[（(][^）)]*[）)]\s*[:：]\s*', '：', dialogue)
+        # Clean up double colons
+        cleaned = re.sub(r'：+', '：', cleaned)
+        return cleaned
+
+    @staticmethod
+    def _clean_transition(transition: str) -> str:
+        """Strip cross-shot references from transition text.
+
+        Storyboard writes:  衔接镜头2的0-3秒：萧澈坐在床上神色警觉...
+        Video prompt needs: 萧澈坐在床上神色警觉，听到门口传来少女声音
+
+        Each shot is generated independently — cross-shot references like
+        "衔接镜头N" are noise that confuses the video model.
+        """
+        if not transition:
+            return ""
+        import re
+        # Strip "衔接镜头N的X-X秒：" prefix (with optional colon variations)
+        cleaned = re.sub(
+            r'^衔接镜头\d+的[\d\-]+秒[：:]?\s*',
+            '',
+            transition.strip(),
+        )
+        # Also strip bare "衔接镜头N" without time range
+        cleaned = re.sub(
+            r'^衔接镜头\d+\s*[：:]?\s*',
+            '',
+            cleaned,
+        )
+        return cleaned.strip()
+
     def _build_video_prompt(
         self, shot: dict, ref_images: list[dict]
     ) -> str:
         """Build industry-standard time-segmented video prompt.
 
-        Structure (from industry reference — proven to work with Doubao):
-        1. Quality preamble
-        2. Per-segment [0-3s][3-7s][7-10s] instructions
-        3. Scene summary
-        4. Reference image descriptions
-        5. Copyright declaration
+        v0.13+ structure (aligned with 豆包漫剧 industry reference):
+          角色—[char names]; 场景—[scene]
+          [0-3s]镜头:...。音效:...。衔接前置指令:...
+          [3-7s]镜头:...。音效:...。衔接前置指令:...
+          [7-10s]镜头:...。音效:...。衔接前置指令:...
+          场景:[scene summary]。（视频不要添加字幕）
+          （使用中文对话，禁止添加字幕）
+          （这是我用AI生成的图片，我有版权）
+
+        v0.13.1 cleanup:
+        - Dialogue: strip （内心/音色） annotations (flags moderation)
+        - Transition: strip "衔接镜头N的X-X秒" cross-shot refs (noise for video model)
         """
         import json
 
-        # ── Quality preamble (industry standard) ──
-        QUALITY_PREAMBLE = (
-            "虚幻引擎5渲染，3D国漫电影质感，16:9宽银幕画幅，"
-            "4K超高清，60fps高帧率，电影级光影，"
-            "全局光照，体积雾，物理布料模拟，动态模糊自然"
-        )
-
-        # ── Read segments from DB (v0.13+ format) ──
+        # ── Read segments from DB ──
         segments_json = shot.get("segments_json", "[]")
         try:
             segments = json.loads(segments_json) if isinstance(segments_json, str) else segments_json
         except (json.JSONDecodeError, TypeError):
             segments = []
 
-        parts = [QUALITY_PREAMBLE]
+        # ── Build parts ──
+        parts = []
 
-        # ── Per-segment instructions ──
+        # ── 1. 角色 + 场景 label (matching industry format) ──
+        role_names: list[str] = []
+        scene_name = ""
+        for ri in ref_images:
+            if ri.get("kind") == "role":
+                # Extract just the character name from label like "角色：萧澈，默认"
+                name = ri["label"].replace("角色：", "").split("，")[0].strip()
+                if name:
+                    role_names.append(name)
+            elif ri.get("kind") == "scene":
+                # Extract scene name from label like "场景多景别参考图" or "场景：婚房"
+                scene_name = ri["label"].replace("场景多景别参考图", "").replace("场景多景别：", "").replace("场景：", "").strip()
+
+        if role_names:
+            parts.append(f"角色—{'、'.join(role_names)}；场景—{scene_name or '当前场景'}")
+
+        # ── 2. Per-segment instructions ──
         if segments and len(segments) == 3:
             for seg in segments:
-                line = f"[{seg.get('time_range', '?')}]镜头:{seg.get('camera', '中景')}，{seg.get('action', '')}"
+                time_range = seg.get("time_range", "?")
+                camera = seg.get("camera", "中景")
+                action = seg.get("action", "")
                 dialogue = seg.get("dialogue")
                 sound = seg.get("sound", "")
                 transition = seg.get("transition")
 
+                # Build segment line: time + camera + action
+                line = f"[{time_range}]镜头:{camera}，{action}"
+
+                # Inline dialogue — strip voice/emotion annotations
                 if dialogue:
-                    line += f"。{dialogue}"
+                    clean_dialogue = self._clean_dialogue(dialogue)
+                    if clean_dialogue:
+                        line += f"，{clean_dialogue}"
+
+                # Sound
                 if sound:
                     line += f"。音效:{sound}"
+
+                # Transition — strip cross-shot references, keep natural action
                 if transition:
-                    line += f"。{transition}"
+                    trans_text = self._clean_transition(transition)
+                    if trans_text:
+                        trans_text = trans_text.rstrip("。")
+                        if not trans_text.startswith("衔接前置指令"):
+                            trans_text = f"衔接前置指令:{trans_text}"
+                        line += f"。{trans_text}"
+
                 parts.append(line + "。")
         else:
-            # Fallback: use old-style flat fields
+            # Fallback: flat 10s segment
             image_prompt = normalize_prompt_terms(shot.get("image_prompt", ""))
             narration = normalize_prompt_terms(shot.get("narration", ""))
             camera = shot.get("camera_movement", "")
@@ -180,25 +295,21 @@ class ShotVideoGeneratorAgent(AgentInterface):
                 "MS": "中景", "LS": "全景",
             }
             motion = camera_motion_map.get(camera, "中景")
-            parts.append(f"[0-10秒]镜头:{motion}，{image_prompt}。{narration}。")
-
-        # ── Dialogue (if not already embedded in segments) ──
-        if not segments:
             dialogue = normalize_prompt_terms(shot.get("dialogue", ""))
+            line = f"[0-10秒]镜头:{motion}，{image_prompt}。{narration}"
             if dialogue:
-                parts.append(f"人物语言与内心独白：{dialogue}。")
+                line += f"，{dialogue}"
+            parts.append(line + "。")
 
-        parts.append("无背景音乐，纯画面内容。")
+        # ── 3. Scene summary (matching industry format) ──
+        scene_summary = ""
+        if scene_name:
+            scene_summary = f"场景:{scene_name}。"
+        # Add video subtitle instruction
+        parts.append(f"{scene_summary}（视频不要添加字幕）")
 
-        # ── Reference images ──
-        if ref_images:
-            ref_parts = ["参考图说明："]
-            for i, ri in enumerate(ref_images):
-                ref_parts.append(f"第 {i+1} 张为{ri['label']}")
-                ref_parts.append("；" if i < len(ref_images) - 1 else "。")
-            parts.append("".join(ref_parts))
-
-        parts.append("原比例。")
+        # ── 4. Closing instructions ──
+        parts.append("（使用中文对话，禁止添加字幕）")
         parts.append("（这是我用AI生成的图片，我有版权）")
 
         return "\n".join(parts)
