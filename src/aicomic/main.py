@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from .parsers import parse_file, UnsupportedFormatError
+
 
 def _load_config(config_path: Path) -> dict:
     """Load YAML config, with env var overrides."""
@@ -91,11 +93,9 @@ def _build_llm_client(backend: str, config: dict):
 
 def cmd_run(args: argparse.Namespace, config: dict):
     """Handle the 'run' subcommand."""
-    # Ensure UTF-8 output on Windows (avoids UnicodeEncodeError with ✓✗⚠⏭)
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+    # Force UTF-8 output (especially on Windows with GBK consoles)
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     from .db.repository import Database
     from .bus import AgentBus
@@ -118,9 +118,20 @@ def cmd_run(args: argparse.Namespace, config: dict):
         print(f"Error: File not found: {chapter_file}", file=sys.stderr)
         sys.exit(1)
 
-    raw_text = chapter_file.read_text(encoding="utf-8")
+    try:
+        raw_text = parse_file(
+            chapter_file,
+            parser_configs=config.get("parsers"),
+        )
+    except UnsupportedFormatError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     if not raw_text.strip():
-        print("Error: File is empty", file=sys.stderr)
+        print("Error: File is empty or produced no text", file=sys.stderr)
         sys.exit(1)
 
     db_path = _resolve_db_path(args.db, config)
@@ -289,7 +300,7 @@ def main():
     run_parser.add_argument(
         "file",
         type=Path,
-        help="Path to chapter text file (.txt)",
+        help="Path to chapter file (.txt, .docx, .pdf)",
     )
     run_parser.add_argument(
         "--backend",
