@@ -1,7 +1,7 @@
 """Multi-format file parsers for novel content ingestion.
 
 Supports:
-    - .txt  (utf-8/gbk/gb18030 auto-detection)
+    - .txt  (utf-8-sig/utf-8/gbk/gb18030 auto-detection)
     - .docx (Word document paragraph extraction)
     - .pdf  (embedded text + Tesseract OCR fallback for scanned PDFs)
 
@@ -86,11 +86,14 @@ def parse_file(
     if parser_configs:
         pdf_cfg = parser_configs.get("pdf")
         if pdf_cfg:
-            registry = [
-                TxtParser(),
-                DocxParser(),
-                PdfParser(config=PdfParserConfig(**pdf_cfg)),
-            ]
+            try:
+                registry = [
+                    TxtParser(),
+                    DocxParser(),
+                    PdfParser(config=PdfParserConfig(**pdf_cfg)),
+                ]
+            except TypeError as exc:
+                raise ValueError(f"Invalid parser config: {exc}") from exc
 
     for parser in registry:
         if parser.supports(file_path):

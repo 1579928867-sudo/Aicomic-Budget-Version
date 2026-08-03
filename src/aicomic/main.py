@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from .parsers import parse_file, UnsupportedFormatError
+from .parsers import parse_file
 
 
 def _load_config(config_path: Path) -> dict:
@@ -94,8 +94,11 @@ def _build_llm_client(backend: str, config: dict):
 def cmd_run(args: argparse.Namespace, config: dict):
     """Handle the 'run' subcommand."""
     # Force UTF-8 output (especially on Windows with GBK consoles)
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
     from .db.repository import Database
     from .bus import AgentBus
@@ -123,10 +126,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
             chapter_file,
             parser_configs=config.get("parsers"),
         )
-    except UnsupportedFormatError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
-    except ValueError as exc:
+    except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 

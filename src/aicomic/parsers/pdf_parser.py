@@ -87,7 +87,7 @@ class PdfParser:
                 page_text = pytesseract.image_to_string(
                     img, lang=self.config.ocr_langs
                 )
-            except pytesseract.TesseractNotFoundError as exc:
+            except (pytesseract.TesseractNotFoundError, pytesseract.TesseractError) as exc:
                 raise RuntimeError(
                     "Tesseract OCR is not installed or not on your PATH.\n"
                     "Install Tesseract: https://github.com/UB-Mannheim/tesseract/wiki\n"
