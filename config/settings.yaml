@@ -70,3 +70,9 @@ video:
 
 logging:
   level: "INFO"
+
+parsers:
+  pdf:
+    min_text_chars: 50        # chars below this → scanned PDF, trigger OCR
+    ocr_dpi: 300              # rendering DPI for OCR path
+    ocr_langs: "chi_sim+eng"  # Tesseract language packs
