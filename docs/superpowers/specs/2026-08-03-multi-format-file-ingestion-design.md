@@ -222,7 +222,7 @@ tesseract-ocr           # Windows: https://github.com/UB-Mannheim/tesseract/wiki
   + chi_sim language pack
 ```
 
----DOCS/superpowers/specs  DOCS/superpowers/specs  DOCS将在 README 或 `--help-ocr` 中提供安装指引。
+Tesseract 安装指引将在 README 中提供，也可通过 `aicomic --help-ocr` 查看。
 
 ## Risks & Mitigations
 
