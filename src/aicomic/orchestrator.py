@@ -5,7 +5,6 @@ v0.10 pipeline: Scriptwriter → CharDesigner → SceneDesigner → OutfitManage
 → ShotVideoGenerator → VideoGenerator → VideoComposer
 """
 
-import json
 from pathlib import Path
 
 from .interface import AgentResult
@@ -37,6 +36,39 @@ class Orchestrator:
         self.bus = bus
         self.db = db
 
+    def _count_existing_images(self, chapter_id: int) -> int:
+        """Count character outfit + scene images that exist on disk for this chapter.
+
+        Walks the character_outfit and scene_card tables; counts only rows
+        whose image_path points to a file that exists.
+        """
+        count = 0
+        # Count character_outfit images linked to this chapter's characters
+        # via the shot_character_outfit junction table (v0.12)
+        rows = self.db.conn.execute("""
+            SELECT co.image_path FROM character_outfit co
+            JOIN shot_character_outfit sco ON sco.character_id = co.character_id
+            JOIN storyboard_shot ss ON ss.id = sco.shot_id
+            JOIN script s ON s.id = ss.script_id
+            WHERE s.chapter_id = ?
+        """, (chapter_id,)).fetchall()
+        for r in rows:
+            if r["image_path"] and Path(r["image_path"]).exists():
+                count += 1
+
+        # Count scene images
+        rows2 = self.db.conn.execute("""
+            SELECT sc2.multi_view_image FROM scene_card sc2
+            JOIN storyboard_shot ss2 ON ss2.scene_id = sc2.id
+            JOIN script s2 ON s2.id = ss2.script_id
+            WHERE s2.chapter_id = ? AND sc2.multi_view_image != ''
+        """, (chapter_id,)).fetchall()
+        for r in rows2:
+            p = r["multi_view_image"]
+            if p and Path(p).exists():
+                count += 1
+        return count
+
     def _resolve_script_id(self, chapter_id: int) -> int | None:
         """Get the latest script_id for a chapter from the DB.
 
@@ -55,6 +87,7 @@ class Orchestrator:
         ).fetchone()
         if not row:
             return [], [], 0
+        import json
         raw = json.loads(row["raw_json"])
         chars = list(raw.get("casting", {}).keys()) if isinstance(raw.get("casting"), dict) else raw.get("characters", [])
         scenes = list(raw.get("scenes", {}).keys()) if isinstance(raw.get("scenes"), dict) else raw.get("scenes_list", [])
@@ -64,24 +97,15 @@ class Orchestrator:
     def run_chapter(
         self, chapter_id: int, raw_text: str,
         with_video: bool = False,
+        with_images: bool = False,
     ) -> AgentResult:
         """Run the full pipeline for a single chapter."""
         self.db.log("orchestrator", chapter_id, "pipeline_started")
 
-        # ── Early dependency check: MoviePy for video composition ──
-        if with_video:
-            try:
-                from moviepy import VideoFileClip  # noqa: F401
-            except ImportError:
-                msg = "moviepy not installed. Run: pip install moviepy"
-                self.db.log("orchestrator", chapter_id, "pipeline_failed",
-                           {"failed_at": "early_check", "error": msg}, level="ERROR")
-                return AgentResult(success=False, error=msg)
-
         # ── Resume detection ──
         AGENTS_IN_ORDER = [
             "scriptwriter", "char-designer", "scene-designer",
-            "storyboard-agent", "outfit-manager",
+            "outfit-manager", "storyboard-agent", "image-generator",
             "shot-visualizer", "shot-video-generator",
         ]
         completed = []
@@ -174,7 +198,6 @@ class Orchestrator:
                 {"failed_at": "char-designer", "error": char_result.error},
                 level="ERROR",
             )
-            return char_result
 
         outfits_created = char_result.data.get("outfits_created", 0) if char_result.data else 0
         char_names = char_result.data.get("character_names", []) if char_result.data else []
@@ -199,14 +222,29 @@ class Orchestrator:
                 {"failed_at": "scene-designer", "error": scene_result.error},
                 level="ERROR",
             )
-            return scene_result
 
         scenes_updated = scene_result.data.get("scenes_updated", 0) if scene_result.data else 0
         scene_names = scene_result.data.get("scene_names", []) if scene_result.data else []
         print(f"  ✓ Scene Designer: {scenes_updated} 场景 "
               f"({', '.join(scene_names) if scene_names else 'N/A'})")
 
-        # ── Step 4: Storyboard Agent (script beats → merged camera shots) ──
+        # ── Step 4: Outfit Manager ──
+        outfit_result = self.bus.run(
+            "outfit-manager",
+            {"chapter_id": chapter_id, "script_id": script_id},
+            self.db,
+        )
+        if outfit_result.success:
+            outfits_gen = outfit_result.data.get("outfits_generated", 0) if outfit_result.data else 0
+            shots_tagged = outfit_result.data.get("shots_tagged", 0) if outfit_result.data else 0
+            if outfits_gen > 0:
+                print(f"  ✓ Outfit Manager: {outfits_gen} 新服饰标签, {shots_tagged} 镜头已标记")
+            else:
+                print(f"  ⏭ Outfit Manager: 无换装检测")
+        else:
+            print(f"  ⚠ Outfit Manager: {outfit_result.error}")
+
+        # ── Step 5: Storyboard Agent (script beats → merged camera shots) ──
         storyboard_result = self.bus.run(
             "storyboard-agent",
             {"chapter_id": chapter_id, "script_id": script_id},
@@ -224,29 +262,65 @@ class Orchestrator:
         shots_created = storyboard_result.data.get("shots_created", 0) if storyboard_result.data else 0
         print(f"  ✓ Storyboard Agent: {shots_created} 镜头 (合并后)")
 
-        # ── Step 5: Outfit Manager (depends on storyboard shots) ──
-        outfit_result = self.bus.run(
-            "outfit-manager",
-            {"chapter_id": chapter_id, "script_id": script_id},
-            self.db,
-        )
-        if outfit_result.success:
-            outfits_gen = outfit_result.data.get("outfits_generated", 0) if outfit_result.data else 0
-            shots_tagged = outfit_result.data.get("shots_tagged", 0) if outfit_result.data else 0
-            if outfits_gen > 0:
-                print(f"  ✓ Outfit Manager: {outfits_gen} 新服饰标签, {shots_tagged} 镜头已标记")
-            else:
-                print(f"  ⏭ Outfit Manager: 无换装检测")
-        else:
-            print(f"  ⚠ Outfit Manager: {outfit_result.error}")
-            # Non-fatal but log — continues after storyboard ensures shots exist
-            self.db.log(
-                "orchestrator", chapter_id, "pipeline_warning",
-                {"failed_at": "outfit-manager", "error": outfit_result.error},
-                level="WARNING",
+        # ── Step 6: Image Generator (optional) ──
+        img_result = None
+        if with_images and script_id:
+            img_result = self.bus.run(
+                "image-generator",
+                {"chapter_id": chapter_id, "script_id": script_id},
+                self.db,
             )
+            if img_result.success:
+                imgs = img_result.data.get("images_generated", 0) if img_result.data else 0
+                outfits_p = img_result.data.get("outfits_processed", 0) if img_result.data else 0
+                scenes_p = img_result.data.get("scenes_processed", 0) if img_result.data else 0
+                skipped = (img_result.data or {}).get("status") == "skipped"
 
-        # ── Step 6: Shot Visualizer ──
+                if skipped:
+                    # Agent skipped via idempotency — trust that images exist
+                    print(f"  ✓ Image Generator: 已跳过 (图片已存在)")
+                elif imgs > 0:
+                    partial_warn = ""
+                    is_partial = (img_result.data or {}).get("status") == "partial"
+                    if is_partial:
+                        failed_o = img_result.data.get("failed_outfits", 0)
+                        failed_s = img_result.data.get("failed_scenes", 0)
+                        parts = []
+                        if failed_o: parts.append(f"{failed_o}角色")
+                        if failed_s: parts.append(f"{failed_s}场景")
+                        partial_warn = f" ⚠ 部分失败({','.join(parts)})，续跑可补"
+                    print(f"  ✓ Image Generator: {imgs} 张图片 "
+                          f"({outfits_p} 角色设定图, {scenes_p} 场景){partial_warn}")
+                else:
+                    # ── v0.10 gate: agent RAN but produced 0 images → abort ──
+                    print(f"  ⚠ Image Generator: 0 张图片")
+                    if with_video:
+                        msg = (
+                            f"图片生成为 0（角色={outfits_p}, 场景={scenes_p}），"
+                            f"视频生成需要参考图，中断 pipeline 避免浪费豆包额度"
+                        )
+                        print(f"  🛑 {msg}")
+                        self.db.log(
+                            "orchestrator", chapter_id, "pipeline_aborted",
+                            {"reason": "no_images_for_video", "detail": msg},
+                            level="ERROR",
+                        )
+                        return AgentResult(success=False, error=msg)
+            else:
+                err = img_result.error or "未知错误"
+                print(f"  ✗ Image Generator: 失败 — {err}")
+                # ── v0.10 gate: image gen failed → video will also fail ──
+                if with_video:
+                    msg = f"图片生成失败（{err}），中断 pipeline 避免浪费豆包视频额度"
+                    print(f"  🛑 {msg}")
+                    self.db.log(
+                        "orchestrator", chapter_id, "pipeline_aborted",
+                        {"reason": "image_gen_failed", "error": err},
+                        level="ERROR",
+                    )
+                    return AgentResult(success=False, error=msg)
+
+        # ── Step 7: Shot Visualizer ──
         shot_vis_result = self.bus.run(
             "shot-visualizer",
             {"chapter_id": chapter_id, "script_id": script_id},
@@ -259,7 +333,6 @@ class Orchestrator:
                 {"failed_at": "shot-visualizer", "error": shot_vis_result.error},
                 level="ERROR",
             )
-            return shot_vis_result
 
         shots_vis = shot_vis_result.data.get("shots_processed", 0) if shot_vis_result.data else 0
         print(f"  ✓ Shot Visualizer: {shots_vis} 镜头已生成分镜提示词")
@@ -342,6 +415,7 @@ class Orchestrator:
                 "scene_designer": "ok" if scene_result.success else "failed",
                 "outfit_manager": "ok" if outfit_result.success else "failed",
                 "storyboard_agent": "ok" if storyboard_result.success else "failed",
+                "image_generator": "ok" if (img_result and img_result.success) else "skipped",
                 "shot_visualizer": "ok" if shot_vis_result.success else "failed",
             },
         )
@@ -357,6 +431,7 @@ class Orchestrator:
                 "shots_created": shots_created,
                 "outfits_created": outfits_created,
                 "scenes_updated": scenes_updated,
+                "images_generated": img_result.data.get("images_generated", 0) if (img_result and img_result.data) else 0,
                 "shots_visualized": shots_vis,
                 "clips_created": (
                     shot_video_result.data.get("clips_created", 0)

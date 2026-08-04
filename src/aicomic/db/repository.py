@@ -463,7 +463,7 @@ class Database:
 
         IMPORTANT: preserves existing image_path when the new value is empty.
         This prevents CharDesigner (which always passes image_path="") from
-        overwriting previously set image paths.
+        overwriting paths set by ImageGenerator.
         """
         existing = self.conn.execute(
             "SELECT image_path FROM character_outfit WHERE character_id = ? AND tag = ?",

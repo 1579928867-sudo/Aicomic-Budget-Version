@@ -145,13 +145,30 @@ class _FakeVideoComposer(AgentInterface):
         )
 
 
-def _register_all_agents(bus, with_composer=False):
+class _FakeImageGenerator(AgentInterface):
+    agent_name = "image-generator"
+
+    def validate_input(self, input_data: dict) -> bool:
+        return "chapter_id" in input_data and "script_id" in input_data
+
+    def execute(self, input_data: dict, db) -> AgentResult:
+        chapter_id = input_data["chapter_id"]
+        db.set_agent_status(self.agent_name, chapter_id, "done")
+        return AgentResult(
+            success=True,
+            data={"images_generated": 6, "outfits_processed": 2, "scenes_processed": 1},
+        )
+
+
+def _register_all_agents(bus, with_composer=False, with_images=False):
     """Register all fake agents for v0.10 pipeline."""
     bus.register(_FakeScriptwriter())
     bus.register(_FakeStoryboardAgent())
     bus.register(_FakeCharDesigner())
     bus.register(_FakeSceneDesigner())
     bus.register(_FakeOutfitManager())
+    if with_images:
+        bus.register(_FakeImageGenerator())
     bus.register(_FakeShotVisualizer())
     bus.register(_FakeVideoGenerator())
     if with_composer:
@@ -524,6 +541,34 @@ def test_orchestrator_run_chapter_with_video_and_composer():
         assert result.data["clips_created"] == 6
         assert result.data.get("final_video_path") is not None
         assert db.get_agent_status("video-composer", chapter_id) == "done"
+    finally:
+        db.close()
+        db_path.unlink()
+
+
+def test_orchestrator_run_chapter_with_images():
+    """v0.10: with_images=True should run ImageGenerator."""
+    bus = AgentBus()
+    _register_all_agents(bus, with_images=True)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    db_path = Path(tmp.name)
+    db = Database(db_path)
+    db.connect()
+    db.init_schema()
+    db.migrate_schema()
+
+    try:
+        novel_id = db.create_novel("测试", "")
+        chapter_id = db.create_chapter(novel_id, 1, "内容")
+
+        orchestrator = Orchestrator(bus, db)
+        result = orchestrator.run_chapter(chapter_id, "内容", with_images=True)
+
+        assert result.success is True
+        assert result.data.get("images_generated") == 6
+        assert db.get_agent_status("image-generator", chapter_id) == "done"
     finally:
         db.close()
         db_path.unlink()
