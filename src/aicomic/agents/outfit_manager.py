@@ -105,8 +105,8 @@ class OutfitManagerAgent(AgentInterface):
         return False
 
     def _llm_detect_outfit(
-        self, shot_text: str, character_name: str, existing_tags: list[str],
-        db: Database,
+        self, chapter_id: int, shot_text: str, character_name: str,
+        existing_tags: list[str], db: Database,
     ) -> dict | None:
         """Call LLM to determine if an outfit change is happening."""
         try:
@@ -122,12 +122,12 @@ class OutfitManagerAgent(AgentInterface):
             )
             return result
         except Exception:
-            db.log(self.agent_name, self._chapter_id, "llm_detect_error",
+            db.log(self.agent_name, chapter_id, "llm_detect_error",
                    {"character": character_name}, level="ERROR")
             return None
 
     def _generate_outfit_prompt(
-        self, character_name: str, tag: str, clothing_desc: str,
+        self, chapter_id: int, character_name: str, tag: str, clothing_desc: str,
         activation_condition: str, db: Database,
     ) -> str:
         """Generate a design_prompt for a new outfit via LLM.
@@ -154,13 +154,13 @@ class OutfitManagerAgent(AgentInterface):
             )
             return result.get("design_prompt", "")
         except Exception:
-            db.log(self.agent_name, self._chapter_id, "generate_prompt_error",
+            db.log(self.agent_name, chapter_id, "generate_prompt_error",
                    {"character": character_name, "tag": tag}, level="ERROR")
             return ""
 
     def detect_outfit_change(
-        self, shot_text: str, character_id: int, character_name: str,
-        db: Database,
+        self, chapter_id: int, shot_text: str, character_id: int,
+        character_name: str, db: Database,
     ) -> OutfitDecision | None:
         """Detect if this shot triggers an outfit change.
 
@@ -184,7 +184,7 @@ class OutfitManagerAgent(AgentInterface):
                 )
 
         # Step 3: LLM detection
-        result = self._llm_detect_outfit(shot_text, character_name, existing_tags, db)
+        result = self._llm_detect_outfit(chapter_id, shot_text, character_name, existing_tags, db)
         if not result or not result.get("has_change"):
             return None
 
@@ -236,6 +236,7 @@ class OutfitManagerAgent(AgentInterface):
     def _apply_outfit_decision(
         self, decision: OutfitDecision | None, char_id: int, shot_id: int,
         char_current_tags: dict, db: Database, char_name: str,
+        chapter_id: int,
     ) -> tuple[int, int]:
         """Handle the three decision branches, update db and tag tracking.
 
@@ -254,7 +255,7 @@ class OutfitManagerAgent(AgentInterface):
 
         # decision.change_type == "new"
         design_prompt = self._generate_outfit_prompt(
-            char_name, decision.tag,
+            chapter_id, char_name, decision.tag,
             decision.clothing_desc,
             decision.activation_condition,
             db,
@@ -284,7 +285,6 @@ class OutfitManagerAgent(AgentInterface):
         """
         chapter_id = input_data["chapter_id"]
         script_id = input_data["script_id"]
-        self._chapter_id = chapter_id
 
         skip = begin_agent_run(self.agent_name, chapter_id, db,
                                {"script_id": script_id})
@@ -327,11 +327,11 @@ class OutfitManagerAgent(AgentInterface):
                         continue
 
                     decision = self.detect_outfit_change(
-                        shot_text, char_id, char_name, db,
+                        chapter_id, shot_text, char_id, char_name, db,
                     )
                     og, st = self._apply_outfit_decision(
                         decision, char_id, shot_id,
-                        char_current_tags, db, char_name,
+                        char_current_tags, db, char_name, chapter_id,
                     )
                     outfits_generated += og
                     shots_tagged += st
@@ -347,6 +347,8 @@ class OutfitManagerAgent(AgentInterface):
                 "shots_tagged": shots_tagged,
             })
 
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as e:
             db.set_agent_status(self.agent_name, chapter_id, "failed")
             db.log(self.agent_name, chapter_id, "failed",

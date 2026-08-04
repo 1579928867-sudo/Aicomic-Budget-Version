@@ -107,6 +107,8 @@ class ImageGeneratorAgent(AgentInterface):
 
             return True
 
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as e:
             db.log(
                 self.agent_name, chapter_id,
@@ -185,6 +187,8 @@ class ImageGeneratorAgent(AgentInterface):
                             print(f"    [角色设定图 #{outfit['id']}] ✓ 已保存 {Path(chosen).name}")
                     else:
                         print(f"    [角色设定图 #{outfit['id']}] ✗ 生成失败: {result.error}")
+                except (KeyboardInterrupt, SystemExit):
+                    raise
                 except Exception as e:
                     db.log(
                         self.agent_name, chapter_id,
@@ -245,6 +249,8 @@ class ImageGeneratorAgent(AgentInterface):
                        {"reason": "No pending outfit or scene images"}, level="INFO")
                 return AgentResult(success=True, data={"images_generated": 0})
 
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as e:
             db.set_agent_status(self.agent_name, chapter_id, "failed")
             db.log(self.agent_name, chapter_id, "failed", {"error": str(e)}, level="ERROR")

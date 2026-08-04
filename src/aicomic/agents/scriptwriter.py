@@ -220,6 +220,8 @@ class ScriptwriterAgent(AgentInterface):
                 },
             )
 
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as e:
             db.set_agent_status(self.agent_name, chapter_id, "failed")
             db.log(

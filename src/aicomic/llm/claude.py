@@ -5,6 +5,8 @@ import re
 
 from anthropic import Anthropic
 
+from . import extract_json
+
 
 class ClaudeClient:
     """Thin wrapper around the Anthropic SDK for JSON-mode generation.
@@ -51,27 +53,4 @@ class ClaudeClient:
             messages=[{"role": "user", "content": user_prompt}],
         )
         text = response.content[0].text
-        return self._extract_json(text)
-
-    @staticmethod
-    def _extract_json(text: str) -> dict:
-        """Extract JSON object from text that may contain markdown fences.
-
-        Args:
-            text: Raw Claude response text.
-
-        Returns:
-            Parsed JSON dict.
-        """
-        text = text.strip()
-
-        # Remove markdown code fences if present
-        if text.startswith("```json"):
-            text = text[7:]
-        elif text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-
-        text = text.strip()
-        return json.loads(text)
+        return extract_json(text)

@@ -6,6 +6,8 @@ Uses the OpenAI-compatible API (https://api.deepseek.com/v1).
 import json
 from openai import OpenAI
 
+from . import extract_json
+
 
 class DeepSeekClient:
     """Thin wrapper around the DeepSeek API for JSON-mode generation.
@@ -58,20 +60,4 @@ class DeepSeekClient:
             messages=messages,
         )
         text = response.choices[0].message.content
-        return self._extract_json(text)
-
-    @staticmethod
-    def _extract_json(text: str) -> dict:
-        """Extract JSON object from text that may contain markdown fences."""
-        text = text.strip()
-
-        # Remove markdown code fences if present
-        if text.startswith("```json"):
-            text = text[7:]
-        elif text.startswith("```"):
-            text = text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-
-        text = text.strip()
-        return json.loads(text)
+        return extract_json(text)

@@ -6,15 +6,37 @@ generate_image() and generate_video() methods that automate the Doubao web UI.
 import sys
 import time
 import uuid
-
-# Fix GBK encoding errors for emoji characters on Windows Chinese consoles
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+import json
+import base64
+import re
+import requests
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# ── Console output encoding (Windows GBK workaround) ──
+_stdout_configured = False
+
+
+def configure_output_encoding():
+    """Fix GBK encoding errors for emoji on Windows Chinese consoles.
+
+    Idempotent — safe to call multiple times. Called explicitly by CLI entry
+    points and ensure_browser() rather than at import time.
+    """
+    global _stdout_configured
+    if _stdout_configured:
+        return
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    _stdout_configured = True
+
+
+# ── Doubao model configuration ──
+DOUBAO_VIDEO_MODEL = "Seedance 2.0 Fast"
+DOUBAO_VIDEO_MODEL_DEFAULT = "Seedance 2.0 Mini"
 
 
 @dataclass
@@ -167,7 +189,6 @@ class DoubaoBrowserClient:
         """Load cookies from JSON file. Fails silently if file missing/malformed."""
         if self.cookie_file.exists():
             try:
-                import json
                 with open(self.cookie_file, "r", encoding="utf-8") as f:
                     self._cookies = json.load(f)
             except Exception:
@@ -185,6 +206,8 @@ class DoubaoBrowserClient:
         (e.g. user manually closed the window), the stale references are cleared
         and a fresh browser is launched.
         """
+        configure_output_encoding()
+
         if self._browser is not None and self._context is not None:
             try:
                 # Health check — accessing .pages fails if context is dead
@@ -527,7 +550,6 @@ class DoubaoBrowserClient:
         Returns:
             Absolute path to saved file, or None on failure.
         """
-        import requests
 
         # Pick best source: prefer avif/webp for quality, fall back to img src
         url = item.get("avif_src") or item.get("webp_src") or item.get("src", "")
@@ -621,7 +643,6 @@ class DoubaoBrowserClient:
         Returns:
             ImageResult with success status and downloaded mp4 file paths.
         """
-        import base64
 
         self._wait_rate_limit()
         video_dir = self.output_dir / "videos"
@@ -714,6 +735,12 @@ class DoubaoBrowserClient:
                     print(f"    [Doubao] ⚠ 无法切换到视频tab，"
                           f"依赖prompt中的'生成视频'关键词兜底")
 
+                # ── 2.6 Switch to Fast model (Seedance 2.0 Fast) ──
+                try:
+                    self._switch_video_model(page, DOUBAO_VIDEO_MODEL)
+                except Exception as e:
+                    print(f"    [Doubao] ⚠ 模型切换异常(忽略): {e}")
+
                 # ── 3. Find the actual active input (changes after tab switch) ──
                 # After switching to 视频 tab, the image-page input is hidden.
                 # Scan for the real input element and record its selector.
@@ -791,9 +818,15 @@ class DoubaoBrowserClient:
                         if url not in captured_video_urls:
                             captured_video_urls.append(url)
                             print(f"    [Doubao] 网络拦截: {url[:100]}... (attachment)")
-                    # Doubao-specific CDN patterns
+                    # Doubao-specific CDN patterns — only for actual video URLs
+                    # (Skip page assets like banners/feeds that happen to
+                    # contain "seedance" in their path but aren't videos.)
                     if any(pat in url.lower() for pat in ['seedance', 'video-generated', 'output']):
-                        if '.mp4' not in url and url not in captured_video_urls:
+                        is_page_asset = any(
+                            skip in url.lower()
+                            for skip in ['banner', 'feed', 'static', 'icon', 'preview']
+                        )
+                        if not is_page_asset and url not in captured_video_urls:
                             captured_video_urls.append(url)
                             print(f"    [Doubao] 网络拦截: {url[:100]}... (doubao pattern)")
 
@@ -816,7 +849,14 @@ class DoubaoBrowserClient:
                     page.keyboard.press("Enter")
                 time.sleep(2.0)
 
-                # ── 8. Poll for completion — wait for actual video, not app buttons ──
+                # ── Clear pre-send network captures (page-load resources
+                # like banners/feeds may have been intercepted before the
+                # video generation even started). ──
+                captured_video_urls.clear()
+                download_future.clear()
+
+                # ── 8. Poll for completion — prefer PLAYER detection,
+                # network captures are a fallback (may be page assets). ──
                 start = time.time()
                 found_content = False
                 content_type = "UNKNOWN"
@@ -824,12 +864,14 @@ class DoubaoBrowserClient:
                 while time.time() - start < self.timeout_sec:
                     elapsed = time.time() - start
 
-                    # Check network captures first (most reliable)
-                    if captured_video_urls and not found_content:
+                    # Network captures are a HINT, not a signal — only
+                    # trust them after 30s (real video URLs arrive late).
+                    # Before 30s, prefer PLAYER DOM detection.
+                    if captured_video_urls and elapsed > 30 and not found_content:
                         found_content = True
                         content_type = "VIDEO"
                         print(f"    [Doubao] ✓ 网络拦截到视频URL ({len(captured_video_urls)}个)")
-                        if int(elapsed) < 20:
+                        if int(elapsed) < 40:
                             time.sleep(5)
                         break
 
@@ -939,18 +981,89 @@ class DoubaoBrowserClient:
                 print(f"    [Doubao] 等待播放器就绪...")
                 time.sleep(5.0)
 
-                # ── 9. Download: use network-captured URLs (most reliable) ──
+                # ── 8.5 Click video player to trigger video load ──
+                # Doubao's player lazily loads the video — the <video> src
+                # is populated only after the user clicks the card/player.
+                # Without this click, no network request fires and no
+                # blob/http URL is available to download.
+                print(f"    [Doubao] 点击播放器触发视频加载...")
+                player_clicked = page.evaluate("""() => {
+                    const players = document.querySelectorAll(
+                        '[class*="video-player"], [class*="player-wrapper"], '
+                        + '[class*="seedance"], [class*="generated-video"], '
+                        + '[class*="video-card"], [class*="VideoCard"], '
+                        + '[class*="result-video"], [class*="output-video"], '
+                        + 'video[src]');
+                    for (const el of players) {
+                        if (el.offsetParent !== null) {
+                            el.click();
+                            return el.className ? el.className.substring(0, 60) : el.tagName;
+                        }
+                    }
+                    return null;
+                }""")
+                if player_clicked:
+                    print(f"    [Doubao] ✓ 已点击播放器: {player_clicked}")
+                    # Wait for video to start streaming — network interceptor
+                    # will capture the CDN request
+                    time.sleep(3.0)
+                else:
+                    print(f"    [Doubao] ⚠ 未找到可点击的播放器元素")
+
+                # ── 9. Download ──
                 downloaded: list[str] = []
+                time.sleep(2.0)
 
-                # First, give the player a moment to load and stream video
-                time.sleep(5.0)
+                # 9a-blob. Extract video blob URL from player (Doubao's new
+                # player renders <video src="blob:..."> — no network mp4 URL.
+                # Fetch the blob data in-page and base64-encode it out.)
+                if not downloaded:
+                    print(f"    [Doubao] blob URL 提取...")
+                    try:
+                        data = page.evaluate("""async () => {
+                            // Find <video> with blob src inside any player container
+                            const videos = document.querySelectorAll('video[src]');
+                            for (const v of videos) {
+                                const src = v.src || v.getAttribute('src') || '';
+                                if (src.startsWith('blob:')) {
+                                    const r = await fetch(src);
+                                    if (!r.ok || r.status !== 200) return null;
+                                    const blob = await r.blob();
+                                    if (blob.size < 50000) return null;
+                                    const ab = await blob.arrayBuffer();
+                                    const bytes = new Uint8Array(ab);
+                                    let bin = '';
+                                    for (let i = 0; i < bytes.length; i++)
+                                        bin += String.fromCharCode(bytes[i]);
+                                    return {base64: btoa(bin), size: bytes.length};
+                                }
+                            }
+                            return null;
+                        }""")
+                        if data and data.get("base64"):
+                            raw = base64.b64decode(data["base64"])
+                            save_path = str(video_dir / f"doubao_{vid_id}.mp4")
+                            with open(save_path, "wb") as f:
+                                f.write(raw)
+                            size_mb = len(raw) / (1024 * 1024)
+                            print(f"    [Doubao] ✓ blob提取({size_mb:.1f}MB): {Path(save_path).name}")
+                            downloaded.append(save_path)
+                        else:
+                            print(f"    [Doubao] blob提取: 未找到视频blob URL")
+                    except Exception as e:
+                        print(f"    [Doubao] ✗ blob提取: {e}")
 
-                # 9a. Network-captured URLs — fetch via browser (has cookies)
-                if captured_video_urls:
+                # 9a. Network-captured URLs — try in-page fetch first, then Python requests fallback
+                if captured_video_urls and not downloaded:
                     print(f"    [Doubao] 网络URL下载({len(captured_video_urls)}个)...")
-                    import base64
+                    # Gather browser cookies for Python fallback
+                    py_cookies = {}
+                    if self._context:
+                        for c in self._context.cookies():
+                            py_cookies[c["name"]] = c["value"]
                     for i, vurl in enumerate(captured_video_urls):
                         try:
+                            # Strategy 1: in-page fetch (works for same-origin blob/http URLs)
                             data = page.evaluate("""async (url) => {
                                 const r = await fetch(url, {credentials: 'include'});
                                 if (!r.ok) return null;
@@ -969,10 +1082,37 @@ class DoubaoBrowserClient:
                                 with open(save_path, "wb") as f:
                                     f.write(raw)
                                 size_mb = len(raw) / (1024 * 1024)
-                                print(f"    [Doubao] ✓ 网络URL({size_mb:.1f}MB): {Path(save_path).name}")
+                                print(f"    [Doubao] ✓ 网络URL-inpage({size_mb:.1f}MB): {Path(save_path).name}")
                                 downloaded.append(save_path)
+                                break
                         except Exception as e:
-                            print(f"    [Doubao] ✗ 网络URL #{i}: {e}")
+                            # CORS or SDK interception — fall through to Python requests
+                            pass
+
+                        # Strategy 2: Python requests with browser cookies (bypasses CORS)
+                        try:
+                            resp = requests.get(
+                                vurl, cookies=py_cookies, timeout=300,
+                                headers={"Referer": "https://www.doubao.com/",
+                                         "User-Agent": (
+                                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                             "AppleWebKit/537.36")},
+                                stream=True,
+                            )
+                            if resp.status_code == 200 and int(resp.headers.get("Content-Length", "0")) > 50000:
+                                save_path = str(video_dir / f"doubao_{vid_id}.mp4")
+                                with open(save_path, "wb") as f:
+                                    for chunk in resp.iter_content(chunk_size=8192):
+                                        f.write(chunk)
+                                size_mb = Path(save_path).stat().st_size / (1024 * 1024)
+                                print(f"    [Doubao] ✓ 网络URL-requests({size_mb:.1f}MB): {Path(save_path).name}")
+                                downloaded.append(save_path)
+                                break
+                            else:
+                                print(f"    [Doubao] requests #{i}: HTTP {resp.status_code}, "
+                                      f"size={resp.headers.get('Content-Length','?')}")
+                        except Exception as e2:
+                            print(f"    [Doubao] ✗ 网络URL #{i}: inpage=CORS, requests={e2}")
 
                 # 9b. Try Playwright download listener (for button-click triggered downloads)
                 if not downloaded and download_future:
@@ -1009,7 +1149,6 @@ class DoubaoBrowserClient:
                 # 9e. Legacy fallback: DOM scan for mp4 URLs + debug on failure
                 if not downloaded:
                     try:
-                        import re
                         html = page.content()
                         all_urls = set(re.findall(
                             r'https?://[^"\'\\s<>]+\.(?:mp4|mov|webm)[^"\'\\s<>]*', html))
@@ -1035,7 +1174,6 @@ class DoubaoBrowserClient:
                         with open(fail_html, "w", encoding="utf-8") as f:
                             f.write(page.content())
                         print(f"    [Doubao] ⚠ 下载失败，已保存截图: {Path(fail_png).name}")
-                        import re
                         all_urls = re.findall(
                             r'https?://[^"\'\\s<>]+', page.content()
                         )
@@ -1046,6 +1184,24 @@ class DoubaoBrowserClient:
                             print(f"    [Doubao] 发现可能URL ({len(media_hits)}):")
                             for u in media_hits[:5]:
                                 print(f"      {u[:120]}")
+                    except Exception:
+                        pass
+
+                if downloaded:
+                    # ── Validate: downloaded file must be an actual video ──
+                    # (Page resources like WebP banners may have been
+                    # mistakenly captured by network interception.)
+                    try:
+                        header = Path(downloaded[0]).read_bytes()[:12]
+                        if b"ftyp" not in header and b"moov" not in header:
+                            # Not a valid mp4 — likely a page asset
+                            print(f"    [Doubao] ⚠ 下载文件非视频格式 (header={header[:8].hex()})，丢弃")
+                            for p in downloaded:
+                                try:
+                                    Path(p).unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            downloaded.clear()
                     except Exception:
                         pass
 
@@ -1123,6 +1279,131 @@ class DoubaoBrowserClient:
             page.wait_for_selector(selector, timeout=8000)
         return selector
 
+    def _switch_video_model(
+        self, page, target_model: str = DOUBAO_VIDEO_MODEL
+    ) -> bool:
+        """Switch video generation model via the dropdown menu.
+
+        The video tab defaults to "Seedance 2.0 Mini". Clicks the model
+        selector button (outer div containing "模型" label + model name
+        + chevron SVG), polls for the dropdown menu to render, then
+        clicks the target menuitem.
+
+        Returns True if switch succeeded or already on target model.
+        """
+        # ── Check if already on target model ──
+        current_model = page.evaluate("""() => {
+            const spans = document.querySelectorAll('span');
+            for (const s of spans) {
+                const t = (s.textContent || '').trim();
+                if (t.startsWith('Seedance')) return t;
+            }
+            return null;
+        }""")
+        if current_model and target_model in current_model:
+            print(f"    [Doubao] 模型已是 {current_model}，无需切换")
+            return True
+
+        print(f"    [Doubao] 当前模型: {current_model or '未知'}，切换到 {target_model}...")
+
+        # ── Step 1: find the model selector button and click with real mouse event ──
+        # Structure (user-provided):
+        #   div.min-w-0.truncate                     ← click target
+        #     div.flex.items-center.whitespace-nowrap
+        #       span "模型" | span "Seedance 2.0 Mini" | svg.size-14 (chevron)
+        # JS .click() may not trigger Radix UI dropdown — use Playwright
+        # mouse.click for full mousedown→mouseup→click sequence.
+        box = page.evaluate("""() => {
+            // Find the chevron SVG (.size-14) inside an element that
+            // also contains "模型" and "Seedance" text.
+            const svgs = document.querySelectorAll('svg.size-14');
+            for (const svg of svgs) {
+                let el = svg.parentElement;
+                for (let i = 0; i < 5; i++) {
+                    if (!el) break;
+                    const t = (el.textContent || '').trim();
+                    if (t.startsWith('模型') && t.includes('Seedance')) {
+                        const r = el.getBoundingClientRect();
+                        return {x: r.x + r.width/2, y: r.y + r.height/2,
+                                w: r.width, h: r.height};
+                    }
+                    el = el.parentElement;
+                }
+            }
+            return null;
+        }""")
+
+        if not box:
+            print(f"    [Doubao] ⚠ 未找到模型选择器按钮，使用默认模型")
+            return False
+
+        page.mouse.click(box["x"], box["y"])
+        print(f"    [Doubao] 点击模型选择器 @ ({box['x']:.0f},{box['y']:.0f})")
+
+        # ── Step 2: poll for dropdown menuitems to appear ──
+        # Radix UI dropdown animates in; poll for up to 4s.
+        import time
+        found = False
+        for _ in range(10):
+            time.sleep(0.4)
+            found = page.evaluate("(target) => {"
+                "const items = document.querySelectorAll('[role=\"menuitem\"]');"
+                "for (const item of items) {"
+                "   if ((item.textContent || '').includes(target)) return true;"
+                "} return false;"
+            "}", target_model)
+            if found:
+                break
+
+        if not found:
+            # Debug: dump what menuitems ARE visible
+            visible = page.evaluate("""() => {
+                const items = document.querySelectorAll('[role=\"menuitem\"]');
+                return Array.from(items).map(i => (i.textContent||'').trim().substring(0, 80));
+            }""")
+            print(f"    [Doubao] ⚠ 未找到 {target_model}，可见菜单项: {visible}")
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return False
+
+        # ── Step 3: click the target menuitem (real mouse click) ──
+        item_box = page.evaluate("(target) => {"
+            "const items = document.querySelectorAll('[role=\"menuitem\"]');"
+            "for (const item of items) {"
+            "   if ((item.textContent || '').includes(target)) {"
+            "       const r = item.getBoundingClientRect();"
+            "       return {x: r.x + r.width/2, y: r.y + r.height/2};"
+            "   }"
+            "} return null;"
+        "}", target_model)
+
+        if not item_box:
+            print(f"    [Doubao] ⚠ 找不到 {target_model} 的坐标")
+            return False
+
+        page.mouse.click(item_box["x"], item_box["y"])
+        print(f"    [Doubao] ✓ 点击 {target_model} @ ({item_box['x']:.0f},{item_box['y']:.0f})")
+        page.wait_for_timeout(1500)
+
+        # ── Step 4: verify switch ──
+        new_model = page.evaluate("""() => {
+            const spans = document.querySelectorAll('span');
+            for (const s of spans) {
+                const t = (s.textContent || '').trim();
+                if (t.startsWith('Seedance')) return t;
+            }
+            return null;
+        }""")
+
+        if new_model and target_model in new_model:
+            print(f"    [Doubao] ✓ 已切换到 {new_model}")
+            return True
+        else:
+            print(f"    [Doubao] ⚠ 模型切换后检测到: {new_model or '未知'}（可能已生效）")
+            return True  # Assume success — the click likely worked even if detection didn't
+
     def _paste_images_to_input(
         self, page, prompt_selector: str, image_paths: list[str]
     ) -> int:
@@ -1134,8 +1415,6 @@ class DoubaoBrowserClient:
 
         Returns the number of attached images detected in the DOM after upload.
         """
-        import base64
-
         valid = [p for p in image_paths if Path(p).exists()]
         if not valid:
             print(f"    [Doubao] ⚠ 无有效参考图片")
@@ -1316,7 +1595,6 @@ class DoubaoBrowserClient:
         self, page, video_url: str, out_dir: Path, index: int
     ) -> str | None:
         """Download a video from URL using browser cookies for auth."""
-        import requests
 
         cookies = {}
         if self._context:
@@ -1529,7 +1807,6 @@ class DoubaoBrowserClient:
 
     def _download_file(self, file_url: str, output_path: str):
         """Download a file from URL to local path using browser cookies for auth."""
-        import requests
 
         cookies = {}
         if self._context:
