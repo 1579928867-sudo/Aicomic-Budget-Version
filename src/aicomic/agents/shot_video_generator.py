@@ -233,53 +233,58 @@ class ShotVideoGeneratorAgent(AgentInterface):
         # ── Build parts ──
         parts = []
 
-        # ── 1. 角色 + 场景 label (matching industry format) ──
+        # ── 1. 角色 + 场景 header ──
         role_names: list[str] = []
         scene_name = ""
         for ri in ref_images:
             if ri.get("kind") == "role":
-                # Extract just the character name from label like "角色：萧澈，默认"
                 name = ri["label"].replace("角色：", "").split("，")[0].strip()
                 if name:
                     role_names.append(name)
             elif ri.get("kind") == "scene":
-                # Extract scene name from label like "场景多景别参考图" or "场景：婚房"
                 scene_name = ri["label"].replace("场景多景别参考图", "").replace("场景多景别：", "").replace("场景：", "").strip()
 
         if role_names:
-            parts.append(f"角色—{'、'.join(role_names)}；场景—{scene_name or '当前场景'}")
+            parts.append(f"角色 — {'、'.join(role_names)}；场景 — {scene_name or '当前场景'}")
 
-        # ── 2. Per-segment instructions ──
+        # ── 横屏 ──
+        parts.append("横屏 16:9")
+
+        # ── 2. Per-segment instructions (no [], no 镜头: prefix) ──
         if segments and len(segments) == 3:
             for seg in segments:
                 time_range = seg.get("time_range", "?")
+                # Normalize "0-3秒" → "0-3 秒" (add space), strip any existing []
+                time_range = time_range.replace("[", "").replace("]", "").replace("秒", " 秒").rstrip()
                 camera = seg.get("camera", "中景")
                 action = seg.get("action", "")
                 dialogue = seg.get("dialogue")
                 sound = seg.get("sound", "")
                 transition = seg.get("transition")
 
+                # Transition — strip cross-shot refs, weave as natural visual
+                # continuation. Each shot is generated independently, so transition
+                # describes the character's next movement, not shot-to-shot metadata.
+                if transition:
+                    import re as _re
+                    trans_text = self._clean_transition(transition)
+                    if trans_text:
+                        trans_text = trans_text.rstrip("。")
+                        trans_text = _re.sub(r'^衔接前置指令[：:]\s*', '', trans_text)
+                        action += f"，随后{trans_text}"
+
                 # Build segment line: time + camera + action
-                line = f"[{time_range}]镜头:{camera}，{action}"
+                line = f"{time_range}{camera}，{action}"
 
                 # Inline dialogue — strip voice/emotion annotations
                 if dialogue:
                     clean_dialogue = self._clean_dialogue(dialogue)
                     if clean_dialogue:
-                        line += f"，{clean_dialogue}"
+                        line += f"。{clean_dialogue}"
 
                 # Sound
                 if sound:
-                    line += f"。音效:{sound}"
-
-                # Transition — strip cross-shot references, keep natural action
-                if transition:
-                    trans_text = self._clean_transition(transition)
-                    if trans_text:
-                        trans_text = trans_text.rstrip("。")
-                        if not trans_text.startswith("衔接前置指令"):
-                            trans_text = f"衔接前置指令:{trans_text}"
-                        line += f"。{trans_text}"
+                    line += f"。音效：{sound}"
 
                 parts.append(line + "。")
         else:
@@ -296,7 +301,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
             }
             motion = camera_motion_map.get(camera, "中景")
             dialogue = normalize_prompt_terms(shot.get("dialogue", ""))
-            line = f"[0-10秒]镜头:{motion}，{image_prompt}。{narration}"
+            line = f"0-10 秒{motion}，{image_prompt}。{narration}"
             if dialogue:
                 line += f"，{dialogue}"
             parts.append(line + "。")
@@ -304,7 +309,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
         # ── 3. Scene summary (matching industry format) ──
         scene_summary = ""
         if scene_name:
-            scene_summary = f"场景:{scene_name}。"
+            scene_summary = f"场景：{scene_name}。"
         # Add video subtitle instruction
         parts.append(f"{scene_summary}（视频不要添加字幕）")
 

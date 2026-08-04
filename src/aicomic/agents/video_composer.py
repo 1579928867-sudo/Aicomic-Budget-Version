@@ -40,17 +40,26 @@ class VideoComposerAgent(AgentInterface):
 
         try:
             # ── Load video clips ──
-            clips = db.get_video_clips(script_id)
-            if not clips:
+            all_clips = db.get_video_clips(script_id)
+            if not all_clips:
                 raise ValueError(f"No video clips found for script_id={script_id}")
 
-            # Filter to existing files (skip missing)
+            # ── Build shot_id → scene_id map from storyboard shots ──
+            shots = db.get_storyboard_shots(script_id)
+            shot_to_scene: dict[int, int | None] = {}
+            for s in shots:
+                sd = dict(s)
+                shot_to_scene[sd["id"]] = sd.get("scene_id")
+
+            # Filter to existing files, track scene_id per clip
             clip_paths: list[str] = []
-            for c in clips:
+            clip_scene_ids: list[int | None] = []
+            for c in all_clips:
                 cd = dict(c)
                 fp = cd.get("file_path", "")
                 if fp and Path(fp).exists():
                     clip_paths.append(fp)
+                    clip_scene_ids.append(shot_to_scene.get(cd.get("shot_id")))
                 else:
                     db.log(
                         self.agent_name, chapter_id, "clip_missing",
@@ -61,14 +70,11 @@ class VideoComposerAgent(AgentInterface):
             if not clip_paths:
                 raise ValueError("No existing video clip files to compose")
 
-            # ── Load shots for subtitle text ──
-            shots = db.get_storyboard_shots(script_id)
-
             # ── Compose ──
             output_path = str(
                 self.output_dir / f"final_{chapter_id}.mp4"
             )
-            final_path = self._compose(clip_paths, shots, output_path, chapter_id, db)
+            final_path = self._compose(clip_paths, clip_scene_ids, output_path, chapter_id, db)
 
             # ── Save to DB ──
             final_video_id = db.create_final_video(chapter_id, final_path)
@@ -95,6 +101,8 @@ class VideoComposerAgent(AgentInterface):
                 },
             )
 
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as e:
             db.set_agent_status(self.agent_name, chapter_id, "failed")
             db.log(
@@ -106,15 +114,16 @@ class VideoComposerAgent(AgentInterface):
     def _compose(
         self,
         clip_paths: list[str],
-        shots: list[dict],
+        clip_scene_ids: list[int | None],
         output_path: str,
         chapter_id: int,
         db: Database,
     ) -> str:
-        """Compose video clips with transitions using MoviePy.
+        """Compose video clips with scene-aware transitions.
 
-        v0.13: Subtitles are embedded by Doubao during generation —
-        no MoviePy text overlays needed. Just concatenate + fade.
+        Fade-in on the first clip, fade-out on the last clip. Between clips:
+        - Same scene: hard cut (no transition)
+        - Scene change: 0.3s fade-out at clip end (next clip starts clean)
 
         Override this in tests to skip actual rendering.
         """
@@ -132,6 +141,8 @@ class VideoComposerAgent(AgentInterface):
             try:
                 vc = VideoFileClip(fp)
                 video_clips.append(vc)
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except Exception as e:
                 db.log(
                     self.agent_name, chapter_id, "clip_load_failed",
@@ -142,13 +153,30 @@ class VideoComposerAgent(AgentInterface):
         if not video_clips:
             raise RuntimeError("Failed to load any video clips")
 
-        # Apply fade in/out, then concatenate (subtitles already embedded in video)
+        # ── Apply transitions: only at scene boundaries ──
         processed = []
-        for clip in video_clips:
-            clip = clip.with_effects([FadeIn(0.3), FadeOut(0.3)])
+        for i, clip in enumerate(video_clips):
+            is_first = (i == 0)
+            is_last = (i == len(video_clips) - 1)
+            # Scene change: current clip's scene differs from next clip's scene
+            scene_changes = (
+                not is_last
+                and clip_scene_ids[i] is not None
+                and clip_scene_ids[i + 1] is not None
+                and clip_scene_ids[i] != clip_scene_ids[i + 1]
+            )
+
+            effects = []
+            if is_first:
+                effects.append(FadeIn(0.3))
+            if is_last or scene_changes:
+                effects.append(FadeOut(0.3))
+
+            if effects:
+                clip = clip.with_effects(effects)
             processed.append(clip)
 
-        # Concatenate all processed clips
+        # Concatenate
         final = concatenate_videoclips(processed)
         try:
             final.write_videofile(
@@ -158,7 +186,6 @@ class VideoComposerAgent(AgentInterface):
                 fps=24,
             )
         finally:
-            # Clean up all clips — even if write_videofile raises
             for c in video_clips:
                 try:
                     c.close()
