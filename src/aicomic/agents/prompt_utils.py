@@ -21,7 +21,7 @@ def user_select_candidate(
     allow_skip: bool = False,
     skip_msg: str = "",
 ) -> str | None:
-    """CLI candidate selection used by ImageGenerator and ShotVideoGenerator.
+    """CLI candidate selection used by ShotVideoGenerator.
 
     Non-interactive mode: returns paths[0] immediately.
     Interactive mode: opens candidates in system viewer, prompts user to pick.

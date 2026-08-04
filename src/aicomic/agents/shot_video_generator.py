@@ -249,6 +249,9 @@ class ShotVideoGeneratorAgent(AgentInterface):
         if role_names:
             parts.append(f"角色—{'、'.join(role_names)}；场景—{scene_name or '当前场景'}")
 
+        # 16:9 horizontal (must be explicit — default may be portrait)
+        parts.append("横屏16:9")
+
         # ── 2. Per-segment instructions ──
         if segments and len(segments) == 3:
             for seg in segments:
@@ -260,7 +263,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                 transition = seg.get("transition")
 
                 # Build segment line: time + camera + action
-                line = f"[{time_range}]镜头:{camera}，{action}"
+                line = f"{time_range}{camera}，{action}"
 
                 # Inline dialogue — strip voice/emotion annotations
                 if dialogue:
@@ -436,7 +439,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                         {"shot_num": shot_num, "shot_id": shot["id"]},
                         level="WARNING",
                     )
-                    print(f"    ⚠ 无参考图片（需先运行 Image Generator），跳过")
+                    print(f"    ⚠ 无参考图片，跳过")
                     continue
 
                 print(f"    📎 参考图片: {len(ref_images)} 张")
@@ -591,9 +594,11 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     clips_created += 1
                     print(f"    💾 已保存到数据库 (shot_id={shot['id']})")
 
+                except (KeyboardInterrupt, SystemExit):
+                    raise
                 except Exception as e:
                     db.log(
-                        self.agent_name, chapter_id, "shot_video_db_error",
+                        self.agent_name, chapter_id, "clip_save_failed",
                         {"shot_num": shot_num, "error": str(e)},
                         level="ERROR",
                     )
@@ -632,6 +637,8 @@ class ShotVideoGeneratorAgent(AgentInterface):
                 },
             )
 
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception as e:
             db.set_agent_status(self.agent_name, chapter_id, "failed")
             db.log(self.agent_name, chapter_id, "failed", {"error": str(e)}, level="ERROR")

@@ -110,7 +110,6 @@ def cmd_run(args: argparse.Namespace, config: dict):
     from .agents.video_generator import VideoGeneratorAgent
     from .agents.video_composer import VideoComposerAgent
     from .doubao.client import MockVideoGenerator, DoubaoVideoGenerator
-    from .agents.image_generator import ImageGeneratorAgent
     from .agents.shot_video_generator import ShotVideoGeneratorAgent
     from .agents.outfit_manager import OutfitManagerAgent
     from .doubao.browser import DoubaoBrowserClient
@@ -185,7 +184,6 @@ def cmd_run(args: argparse.Namespace, config: dict):
         outfit_manager = OutfitManagerAgent(llm_client=llm)
         bus.register(outfit_manager)
 
-        with_images = getattr(args, "with_images", False)
         with_video = getattr(args, "with_video", False)
         no_headless = getattr(args, "no_headless", False)
 
@@ -198,7 +196,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
 
         # v0.6: Shared browser client (created once, shared across agents)
         browser_client = None
-        if with_images or (with_video and video_backend == "doubao"):
+        if with_video and video_backend == "doubao":
             doubao_cfg = config.get("doubao", {})
             headless = False if no_headless else doubao_cfg.get("headless", True)
             if no_headless:
@@ -217,10 +215,6 @@ def cmd_run(args: argparse.Namespace, config: dict):
             pages_cfg = doubao_cfg.get("pages", {})
             if pages_cfg:
                 browser_client.page_urls.update(pages_cfg)
-
-        if with_images:
-            image_generator = ImageGeneratorAgent(browser_client=browser_client)
-            bus.register(image_generator)
 
         if with_video:
             if video_backend == "doubao":
@@ -250,7 +244,6 @@ def cmd_run(args: argparse.Namespace, config: dict):
         # ── Run ──
         pipeline_label = "v0.10"
         steps = "Scriptwriter → CharDesigner → SceneDesigner → OutfitManager → StoryboardAgent"
-        steps += " → ImageGenerator" if with_images else ""
         steps += " → ShotVisualizer"
         if with_video:
             if video_backend == "doubao":
@@ -259,7 +252,7 @@ def cmd_run(args: argparse.Namespace, config: dict):
                 steps += " → VideoGenerator → VideoComposer"
         print(f"Running pipeline ({pipeline_label}: {steps})...")
         result = orchestrator.run_chapter(
-            chapter_id, raw_text, with_video=with_video, with_images=with_images,
+            chapter_id, raw_text, with_video=with_video,
         )
 
         if result.success:
@@ -270,8 +263,6 @@ def cmd_run(args: argparse.Namespace, config: dict):
                 print(f"  Scenes: {result.data.get('scenes_list')}")
                 print(f"  Outfits created: {result.data.get('outfits_created', 0)}")
                 print(f"  Scenes updated: {result.data.get('scenes_updated', 0)}")
-                if with_images:
-                    print(f"  Images generated: {result.data.get('images_generated', 0)}")
                 print(f"  Shots visualized: {result.data.get('shots_visualized', 0)}")
                 if with_video:
                     print(f"  Video clips created: {result.data.get('clips_created', 0)}")
@@ -320,12 +311,6 @@ def main():
         type=Path,
         default=Path("config/settings.yaml"),
         help="Path to config file (default: config/settings.yaml)",
-    )
-    run_parser.add_argument(
-        "--with-images",
-        action="store_true",
-        default=False,
-        help="Also generate real images for characters and scenes via Doubao (default: off)",
     )
     run_parser.add_argument(
         "--with-video",

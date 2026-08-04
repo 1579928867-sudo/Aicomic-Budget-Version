@@ -183,7 +183,7 @@ def main():
     db_path = Path(args.db).resolve()
     if not db_path.exists():
         print(f"❌ 数据库不存在: {db_path}")
-        print("   请先跑完整的图片管线: python -m aicomic run xxx.txt --with-images")
+        print("   请先跑完完整管线: python -m aicomic run xxx.txt")
         sys.exit(1)
 
     db = Database(db_path)
