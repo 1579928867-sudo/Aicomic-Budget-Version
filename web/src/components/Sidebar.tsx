@@ -15,17 +15,18 @@ export function Sidebar() {
 
   return (
     <aside style={{
-      width: 240, minHeight: '100vh', flexShrink: 0,
+      width: 240, height: '100vh', flexShrink: 0, overflow: 'hidden',
       backgroundImage: 'url(/nav-bg.webp)',
       backgroundSize: 'cover', backgroundPosition: 'center',
       position: 'relative',
       display: 'flex', flexDirection: 'column',
-      borderRight: '1px solid var(--border)',
     }}>
-      {/* Texture overlay — deeper tone, more texture visible */}
+      {/* Texture overlay — solid at edges, translucent in middle */}
       <div style={{
         position: 'absolute', inset: 0,
-        background: 'linear-gradient(180deg, rgba(190,182,172,0.72) 0%, rgba(160,150,138,0.78) 50%, rgba(140,130,118,0.82) 100%)',
+        background: `
+          rgba(100,88,76,0.80)
+        `,
         zIndex: 0, pointerEvents: 'none',
       }} />
 
@@ -37,14 +38,14 @@ export function Sidebar() {
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '10px 14px', borderRadius: 10,
-              border: '1px solid rgba(255,255,255,0.1)',
-              background: 'rgba(255,255,255,0.08)',
-              color: 'rgba(255,255,255,0.8)', fontFamily: 'inherit',
-              fontSize: 13, fontWeight: 500, cursor: 'pointer',
+              border: '1px solid rgba(255,255,255,0.12)',
+              background: 'rgba(255,255,255,0.1)',
+              color: 'rgba(255,255,255,0.85)', fontFamily: 'inherit',
+              fontSize: 13, fontWeight: 600, cursor: 'pointer',
               width: '100%', transition: 'all 0.15s',
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.14)'; e.currentTarget.style.color = '#fff'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = 'rgba(255,255,255,0.8)'; }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.18)'; e.currentTarget.style.color = '#fff'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = 'rgba(255,255,255,0.85)'; }}
           >
             <Home size={17} /> 返回首页
           </button>
@@ -60,8 +61,8 @@ export function Sidebar() {
               fontSize: 20, boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
             }}>🎬</div>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>AI漫剧</div>
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', marginTop: 1 }}>Comic Video Studio</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#fff', lineHeight: 1.3 }}>AI漫剧</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.6)', marginTop: 1 }}>Comic Video Studio</div>
             </div>
           </div>
         </div>
@@ -79,8 +80,8 @@ export function Sidebar() {
                   padding: '11px 16px', borderRadius: 10,
                   border: active ? '1px solid rgba(255,255,255,0.15)' : '1px solid transparent',
                   background: active ? 'rgba(255,255,255,0.1)' : 'transparent',
-                  color: active ? '#fff' : 'rgba(255,255,255,0.6)',
-                  fontSize: 14, fontWeight: 500, fontFamily: 'inherit',
+                  color: active ? '#fff' : 'rgba(255,255,255,0.75)',
+                  fontSize: 14, fontWeight: 600, fontFamily: 'inherit',
                   cursor: 'pointer', transition: 'all 0.15s ease',
                 }}
                 onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; e.currentTarget.style.color = 'rgba(255,255,255,0.9)'; }}}
@@ -96,7 +97,7 @@ export function Sidebar() {
         {/* Footer */}
         <div style={{ position: 'relative', zIndex: 1, padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success)' }} />
-          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>v0.3 · 运行中</span>
+          <span style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.5)' }}>v0.3 · 运行中</span>
         </div>
       </div>
     </aside>
