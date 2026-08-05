@@ -3,30 +3,71 @@ import * as THREE from 'three';
 import { ArrowRight, Sparkles } from 'lucide-react';
 import { useAppStore } from '../stores/app';
 
-// ── Cover images from the existing asset library ──
+// ── 你的封面素材 (不够就循环) ──
 const COVER_IMAGES = [
-  '/data/images/doubao_facb398c.jpg',
-  '/data/images/doubao_5ca3c78a.jpg',
-  '/data/images/doubao_0af17d32.jpg',
-  '/data/images/doubao_0b503c22.jpg',
-  '/data/images/doubao_d4fd5f9e.jpg',
-  '/data/images/doubao_4eda36e2.jpg',
-  '/data/images/doubao_dcda7a16.jpg',
-  '/data/images/doubao_9884b65a.jpg',
-  '/data/images/doubao_89c12436.jpg',
-  '/data/images/doubao_15242301.jpg',
-  '/data/images/doubao_52384613.jpg',
-  '/data/images/doubao_ba2b9d2b.jpg',
-  '/data/images/doubao_98d9b2df.jpg',
-  '/data/images/doubao_acb42579.jpg',
-  '/data/images/doubao_1d174a75.jpg',
-  '/data/images/doubao_1585d859.jpg',
+  '/OIP-C.webp',
+  '/OIP-C%20(1).webp',
+  '/OIP-C%20(2).webp',
+  '/77d01fd797f5f0c3735c3aa4f7f10c81.jpg',
+  '/dedeaf9e9c9c0a2ce9c169220f69d6a71753346503145.jpeg',
+  '/phpK4eqjo1693217726.jfif',
+  '/canva-oFLgs-SjRas.jpg',
 ];
 
 const SPHERE_RADIUS = 2.2;
 const CARD_COUNT = 16;
 const CARD_W = 0.55;
 const CARD_H = 0.75;
+
+// ── 创建带圆角 + 内阴影的卡片纹理 ──
+function makeCardTexture(imgSrc: string): Promise<THREE.CanvasTexture> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const w = 256, h = 349; // ~3:4 ratio
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+
+      // 圆角矩形裁剪
+      const r = 14;
+      ctx.beginPath();
+      ctx.moveTo(r, 0);
+      ctx.lineTo(w - r, 0); ctx.arcTo(w, 0, w, r, r);
+      ctx.lineTo(w, h - r); ctx.arcTo(w, h, w - r, h, r);
+      ctx.lineTo(r, h); ctx.arcTo(0, h, 0, h - r, r);
+      ctx.lineTo(0, r); ctx.arcTo(0, 0, r, 0, r);
+      ctx.clip();
+
+      // 绘制图片：cover 填满
+      const scale = Math.max(w / img.width, h / img.height);
+      const iw = img.width * scale, ih = img.height * scale;
+      const dx = (w - iw) / 2, dy = (h - ih) / 2;
+      ctx.drawImage(img, dx, dy, iw, ih);
+
+      // 微妙内发光边框
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(r, 0); ctx.lineTo(w - r, 0); ctx.arcTo(w, 0, w, r, r);
+      ctx.lineTo(w, h - r); ctx.arcTo(w, h, w - r, h, r);
+      ctx.lineTo(r, h); ctx.arcTo(0, h, 0, h - r, r);
+      ctx.lineTo(0, r); ctx.arcTo(0, 0, r, 0, r);
+      ctx.closePath();
+      ctx.stroke();
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = true;
+      resolve(tex);
+    };
+    img.onerror = () => resolve(new THREE.CanvasTexture(document.createElement('canvas')));
+    img.src = imgSrc;
+  });
+}
 
 export default function HomePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -73,7 +114,6 @@ export default function HomePage() {
 
     // ── Cover cards orbiting sphere ──
     const cards: THREE.Mesh[] = [];
-    const textureLoader = new THREE.TextureLoader();
 
     // Fibonacci sphere distribution
     const phi_golden = Math.PI * (3 - Math.sqrt(5));
@@ -87,9 +127,9 @@ export default function HomePage() {
 
       const geometry = new THREE.PlaneGeometry(CARD_W, CARD_H);
       const material = new THREE.MeshStandardMaterial({
-        color: 0xffffff,
-        roughness: 0.6,
-        metalness: 0.05,
+        color: 0xd5c8b8,
+        roughness: 0.35,
+        metalness: 0.02,
         transparent: true,
         opacity: 1,
         side: THREE.DoubleSide,
@@ -100,23 +140,17 @@ export default function HomePage() {
       card.position.set(x * SPHERE_RADIUS, y * SPHERE_RADIUS, z * SPHERE_RADIUS);
       card.lookAt(0, 0, 0);
 
-      // Store original normal for opacity calc
-      card.userData = { basePos: card.position.clone(), theta, y };
-
       scene.add(card);
       cards.push(card);
 
-      // Load texture
+      // Load texture with rounded corners → assign to this card's material
       const imgSrc = COVER_IMAGES[i % COVER_IMAGES.length];
-      textureLoader.load(imgSrc,
-        (tex) => {
-          material.map = tex;
-          material.color.set(0xffffff);
-          material.needsUpdate = true;
-        },
-        undefined,
-        () => { /* fallback: keep white card */ }
-      );
+      const matRef = material; // capture per-card reference
+      makeCardTexture(imgSrc).then((tex) => {
+        matRef.map = tex;
+        matRef.color.set(0xffffff);
+        matRef.needsUpdate = true;
+      });
     }
 
     // ── Handle resize ──
