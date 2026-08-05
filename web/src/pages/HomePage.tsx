@@ -91,7 +91,7 @@ export default function HomePage() {
     const key = new THREE.DirectionalLight(0xffffff, 1.2);
     key.position.set(3, 2, 4);
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0xaaccff, 0.4);
+    const fill = new THREE.DirectionalLight(0xffdcc0, 0.4);
     fill.position.set(-2, -1, -1);
     scene.add(fill);
 
@@ -108,7 +108,7 @@ export default function HomePage() {
       pPos[i * 3 + 2] = r * Math.cos(phi);
     }
     pGeom.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-    const pMat = new THREE.PointsMaterial({ color: 0x8b5cf6, size: 0.015, transparent: true, opacity: 0.5 });
+    const pMat = new THREE.PointsMaterial({ color: 0xd4a574, size: 0.018, transparent: true, opacity: 0.55 });
     const particles = new THREE.Points(pGeom, pMat);
     scene.add(particles);
 
@@ -217,7 +217,7 @@ export default function HomePage() {
     <div style={{
       height: '100vh', display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
-      background: 'radial-gradient(ellipse at center, var(--bg) 30%, rgba(139,92,246,0.05) 70%, rgba(139,92,246,0.10) 100%)',
+      background: 'radial-gradient(ellipse at 50% 40%, #FBF5EE 0%, #F2E6D8 40%, #E8D5C0 80%, #DDC8AE 100%)',
       position: 'relative', overflow: 'hidden',
       fontFamily: '"Noto Sans SC", "Inter", sans-serif',
     }}>
