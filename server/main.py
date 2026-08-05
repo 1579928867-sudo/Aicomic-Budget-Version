@@ -114,11 +114,17 @@ from server.api import pipeline as pipeline_api
 from server.api import agents as agents_api
 from server.api import library as library_api
 from server.api import videos as videos_api
+from server.api import chat as chat_api
+from server.api import settings as settings_api
+from server.api import tasks as tasks_api
 
 app.include_router(pipeline_api.router)
 app.include_router(agents_api.router)
 app.include_router(library_api.router)
 app.include_router(videos_api.router)
+app.include_router(chat_api.router)
+app.include_router(settings_api.router)
+app.include_router(tasks_api.router)
 
 
 # ── Startup: 初始化所有依赖并注入到 api 模块 ──
