@@ -8,13 +8,13 @@ INTENT_PROMPT = """你是一个 AI漫剧助手的意图分类器。根据用户�
 
 支持的意图:
 - generate_chapter: 用户要生成/制作某个章节。输出: {"intent": "generate_chapter", "chapter_num": <数字>}
-- regenerate_character: 用户要重新生成某个角色的图片。输出: {"intent": "regenerate_character", "character_name": "<名>", "extra_hint": "<用户的额外要求>"}
+- regenerate_character: 用户要重新生成某个角色的图片，或微调角色的提示词/外观。输出: {"intent": "regenerate_character", "character_name": "<名>", "extra_hint": "<用户的额外要求>"}
 - regenerate_scene: 用户要重新生成某个场景。输出: {"intent": "regenerate_scene", "scene_name": "<名>", "extra_hint": "<...>"}
 - regenerate_video: 用户要重新生成视频。输出: {"intent": "regenerate_video", "chapter_num": <数字>}
-- import_novel: 用户要上传/导入小说。输出: {"intent": "import_novel"}
+- import_novel: 用户要上传/导入小说（通过文件或直接粘贴文本）。输出: {"intent": "import_novel"}
 - regenerate_char_design: 用户要重新设计角色形象。输出: {"intent": "regenerate_char_design", "character_name": "<名>", "extra_hint": "<...>"}
 - query: 用户是查询/问问题。输出: {"intent": "query", "query_text": "<用户的原始问题>"}
-- chat: 一般闲聊，不触发任何操作。输出: {"intent": "chat", "reply": "<友好回复>"}
+- chat: 一般闲聊、问功能怎么用、咨询帮助，不触发任何操作。输出: {"intent": "chat", "reply": "<友好回复>"}
 
 规则:
 1. 尽量在 extra_hint 中保留用户的具体要求（如"眼神更冷峻""光影更暖"等）

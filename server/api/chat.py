@@ -67,21 +67,35 @@ async def chat_send(body: ChatSendBody):
 
         reply = ""
         task_id = None
-        if intent["intent"] == "generate_chapter":
-            cn = intent.get("chapter_num", 1)
-            reply = f"好的，我来为你生成第{cn}章。请通过 Pipeline API 触发: POST /api/pipeline/run?chapter_id=<ID>"
-        elif intent["intent"] == "regenerate_character":
-            reply = f"好的，重新生成 {intent.get('character_name', '未知')} 的图片" + (f"，要求: {intent.get('extra_hint', '')}" if intent.get("extra_hint") else "")
-        elif intent["intent"] == "regenerate_scene":
-            reply = f"好的，重新生成 {intent.get('scene_name', '未知')} 的场景图" + (f"，要求: {intent.get('extra_hint', '')}" if intent.get("extra_hint") else "")
-        elif intent["intent"] == "regenerate_video":
-            reply = f"好的，重新生成第{intent.get('chapter_num', '?')}章的视频。请通过 Agents API 触发。"
-        elif intent["intent"] == "import_novel":
-            reply = "请上传小说文件 (.txt / .docx / .pdf)，我会帮你解析并入库。"
-        elif intent["intent"] == "query":
-            reply = f"查询: {intent.get('query_text', message)}（可在素材库页面浏览详细信息）"
-        else:
-            reply = intent.get("reply", "你好！我是AI漫剧助手，可以帮你生成漫画章节、管理素材和视频。")
+
+        match intent.get("intent"):
+            case "generate_chapter":
+                cn = intent.get("chapter_num", 1)
+                reply = f"收到！要生成第{cn}章，请先在「素材库」左侧上传该章节的小说文件（.txt/.docx/.pdf），然后在 Pipeline 触发。\n\n💡 提示：你可以点击左侧「漫剧素材库」进入上传页面。"
+            case "regenerate_character":
+                cn = intent.get("character_name", "未知")
+                eh = intent.get("extra_hint", "")
+                hint_text = f"，微调要求：{eh}" if eh else ""
+                reply = f"好的，重新生成「{cn}」的角色图{hint_text}。\n\n请到「漫剧素材库」→ 选择章节 → 人物卡片上点击刷新按钮来触发。"
+            case "regenerate_char_design":
+                cn = intent.get("character_name", "未知")
+                eh = intent.get("extra_hint", "")
+                hint_text = f"，设计方向：{eh}" if eh else ""
+                reply = f"好的，重新设计「{cn}」的形象{hint_text}。\n\n请到「漫剧素材库」选择该角色，点击刷新按钮触发。你也可以在提示词中写入具体的外观要求。"
+            case "regenerate_scene":
+                sn = intent.get("scene_name", "未知")
+                eh = intent.get("extra_hint", "")
+                hint_text = f"，要求：{eh}" if eh else ""
+                reply = f"好的，重新生成「{sn}」的场景图{hint_text}。\n\n请到「漫剧素材库」→ 选择章节 → 场景卡片上点击刷新按钮来触发。"
+            case "regenerate_video":
+                cn = intent.get("chapter_num", "?")
+                reply = f"好的，重新生成第{cn}章的视频。\n\n请到「漫剧视频」页选择该章节，点击「重新生成」按钮。"
+            case "import_novel":
+                reply = "请上传小说文件！（支持 .txt / .docx / .pdf）\n\n📂 推荐方式：点击左侧「漫剧素材库」，在左侧小说列表上方使用上传功能。\n\n✏️ 也可以直接把小说文本粘贴到对话框里，我会帮你保存为章节。"
+            case "query":
+                reply = f"关于「{intent.get('query_text', message)}」的查询：\n\n你可以在左侧「漫剧素材库」浏览角色、场景和分镜的详细信息。如果想知道特定角色的装扮或场景的光影设置，选对应章节即可看到。"
+            case _:
+                reply = intent.get("reply", "你好！我是AI漫剧助手 🎬\n\n我可以帮你了解如何使用这个平台：\n• 上传小说：去「漫剧素材库」\n• 看视频：去「漫剧视频」\n• 配Cookie：去「豆包Cookie」\n• 设API Key：去「系统设置」\n\n有什么想了解的？")
 
         store.insert(chapter_id, "assistant", reply)
         return {"reply": reply, "intent": intent["intent"], "intent_detail": intent, "task_id": task_id}

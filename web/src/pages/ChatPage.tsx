@@ -11,11 +11,13 @@ interface Message {
 
 export function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([
-    { id: 0, role: 'assistant', content: '你好！我是 AI漫剧助手 🎬\n\n我可以帮你：\n• 生成新的漫画章节\n• 重新生成角色 / 场景图片\n• 查询素材信息\n• 管理视频制作\n\n请告诉我你想做什么？' },
+    { id: 0, role: 'assistant', content:  '你好！我是 AI漫剧助手 🎬\n\n我可以帮你：\n• 上传小说文件（.txt / .docx / .pdf）自动入库\n• 在素材库浏览角色、场景、分镜\n• 在视频页播放和下载成品视频\n• 在设置页配置你自己的 LLM API Key\n• 在 Cookie 页配置豆包账号\n\n💡 开始方式：\n1. 先到「豆包Cookie」页配置你的豆包账号\n2. 再到「系统设置」页填入你的 LLM API Key\n3. 在素材库左侧上传小说文件，即可开始生成\n\n有什么我可以帮你的？' },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const chapterId = useAppStore(s => s.selectedChapterId);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -102,15 +104,52 @@ export function ChatPage() {
       {/* Input — sits just below messages, not pushed to very bottom */}
       <div style={{ paddingTop: 16, flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button style={{
-            width: 42, height: 42, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            border: '1px solid var(--border)', background: 'var(--surface)',
-            color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s',
-          }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text-tertiary)'; }}
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file" accept=".txt,.docx,.pdf"
+            style={{ display: 'none' }}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              setUploading(true);
+              const fd = new FormData();
+              fd.append('file', file);
+              try {
+                const res = await fetch('/api/upload', { method: 'POST', body: fd });
+                const data = await res.json();
+                setMessages(prev => [...prev, {
+                  id: Date.now(),
+                  role: 'assistant',
+                  content: `✅ 上传成功！\n\n📖 小说：${data.title}\n📄 章节：第${data.chapter_num}章\n📝 字数：${data.char_count}\n\n你现在可以在素材库里看到它了。`,
+                }]);
+              } catch (e: any) {
+                setMessages(prev => [...prev, {
+                  id: Date.now(),
+                  role: 'assistant',
+                  content: `❌ 上传失败：${e.message}`,
+                }]);
+              } finally {
+                setUploading(false);
+                // 重置 input 以允许重复上传同一文件
+                e.target.value = '';
+              }
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            style={{
+              width: 42, height: 42, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: '1px solid var(--border)', background: 'var(--surface)',
+              color: 'var(--text-tertiary)', cursor: uploading ? 'not-allowed' : 'pointer',
+              opacity: uploading ? 0.5 : 1, transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { if (!uploading) { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}}
+            onMouseLeave={e => { if (!uploading) { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text-tertiary)'; }}}
+            title="上传小说文件 (.txt .docx .pdf)"
           >
-            <Paperclip size={18} />
+            {uploading ? <Loader2 size={18} style={{ animation: 'spin 0.7s linear infinite' }} /> : <Paperclip size={18} />}
           </button>
           <div style={{ flex: 1, position: 'relative' }}>
             <input
