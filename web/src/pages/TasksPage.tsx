@@ -1,111 +1,126 @@
 import { useState, useEffect, useRef } from 'react';
-import { ListTodo, Loader2, RefreshCw, XCircle, CheckCircle2, Clock, Play } from 'lucide-react';
+import { ListTodo, Loader2, RefreshCw, XCircle, CheckCircle2, Clock, Play, StopCircle } from 'lucide-react';
 import { tasks } from '../api';
 import type { Task } from '../types';
 
-const STATUS_ICON: Record<string, any> = {
-  pending: Clock, running: Loader2, done: CheckCircle2, failed: XCircle, cancelled: XCircle,
-};
-const STATUS_COLOR: Record<string, string> = {
-  pending: 'text-amber-400', running: 'text-blue-400', done: 'text-emerald-400', failed: 'text-red-400', cancelled: 'text-zinc-500',
-};
-const STATUS_BG: Record<string, string> = {
-  pending: 'bg-amber-500/10 border-amber-500/20', running: 'bg-blue-500/10 border-blue-500/20', done: 'bg-emerald-500/10 border-emerald-500/20', failed: 'bg-red-500/10 border-red-500/20', cancelled: 'bg-zinc-700/30 border-zinc-600/30',
+const STATUS: Record<string, { icon: any; color: string; bg: string; label: string }> = {
+  pending:  { icon: Clock,          color: '#D49B4A', bg: '#FDF5E8', label: '等待中' },
+  running:  { icon: Loader2,         color: '#3B82C0', bg: '#E8F2FD', label: '运行中' },
+  done:     { icon: CheckCircle2,    color: '#5B8C5A', bg: '#EDF5EC', label: '已完成' },
+  failed:   { icon: XCircle,         color: '#C45C4C', bg: '#FDF0ED', label: '失败' },
+  cancelled:{ icon: StopCircle,      color: '#9C9994', bg: '#F5F3F0', label: '已取消' },
 };
 
 export function TasksPage() {
   const [taskList, setTaskList] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(false);
   const intervalRef = useRef<any>(null);
 
   const fetchTasks = async () => {
-    try {
-      const list = await tasks.list();
-      setTaskList(list);
-    } catch (e) { console.error(e); }
+    try { setTaskList(await tasks.list()); } catch {}
   };
 
   useEffect(() => {
     fetchTasks();
-    intervalRef.current = setInterval(fetchTasks, 3000);
+    intervalRef.current = setInterval(fetchTasks, 4000);
     return () => clearInterval(intervalRef.current);
   }, []);
 
-  const handleCancel = async (id: string) => {
-    await tasks.cancel(id);
-    fetchTasks();
-  };
+  const handleCancel = async (id: string) => { await tasks.cancel(id); fetchTasks(); };
+  const handleRetry = async (id: string) => { await tasks.retry(id); fetchTasks(); };
 
-  const handleRetry = async (id: string) => {
-    await tasks.retry(id);
-    fetchTasks();
-  };
-
-  const formatTime = (ts: string) => {
-    const d = new Date(ts + 'Z');
-    return d.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  };
+  const fmt = (ts: string) => new Date(ts + 'Z').toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
-    <div className="max-w-3xl mx-auto p-6">
-      <div className="flex items-center justify-between mb-6">
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 28 }}>
         <div>
-          <h1 className="text-xl font-bold text-white mb-1">任务中心</h1>
-          <p className="text-sm text-zinc-500">监控和管理所有后台任务</p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>任务中心</h1>
+          <p style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>监控和管理所有后台任务</p>
         </div>
-        <button onClick={fetchTasks} className="p-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-white transition-colors">
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+        <button
+          onClick={fetchTasks}
+          style={{
+            width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-tertiary)',
+            cursor: 'pointer', transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text-tertiary)'; }}
+        >
+          <RefreshCw size={16} />
         </button>
       </div>
 
       {taskList.length === 0 ? (
-        <div className="text-center py-12 text-zinc-600">
-          <ListTodo size={48} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm">暂无任务</p>
+        <div style={{ textAlign: 'center', paddingTop: 60, color: 'var(--text-tertiary)' }}>
+          <ListTodo size={44} style={{ marginBottom: 12, opacity: 0.3 }} />
+          <p style={{ fontSize: 14 }}>暂无任务</p>
+          <p style={{ fontSize: 12, marginTop: 4 }}>通过 Chat 页面触发生成来创建新任务</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {taskList.map(t => {
-            const Icon = STATUS_ICON[t.status] || Clock;
+            const st = STATUS[t.status] || STATUS.pending;
+            const Icon = st.icon;
             const isActive = t.status === 'running' || t.status === 'pending';
             return (
-              <div key={t.id} className={`glass-card p-4 ${STATUS_BG[t.status] || ''}`}>
-                <div className="flex items-center gap-3">
-                  <Icon size={18} className={`${STATUS_COLOR[t.status]} ${t.status === 'running' ? 'animate-spin' : ''}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white">{t.type}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${STATUS_BG[t.status]}`}>{t.status}</span>
+              <div key={t.id} style={{
+                padding: '18px 22px', borderRadius: 14,
+                background: 'var(--surface)', border: `1px solid ${isActive ? st.color + '30' : 'var(--border)'}`,
+                transition: 'box-shadow 0.15s',
+              }}
+                onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--shadow-md)'; }}
+                onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+                  <Icon size={18} style={{ color: st.color, marginTop: 2, ...(t.status === 'running' ? { animation: 'spin 0.7s linear infinite' } : {}) }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{t.type}</span>
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, padding: '2px 10px', borderRadius: 100,
+                        background: st.bg, color: st.color, letterSpacing: '0.03em',
+                      }}>{st.label}</span>
                     </div>
-                    <div className="flex gap-3 mt-1 text-[11px] text-zinc-500">
+                    <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-tertiary)' }}>
                       <span>ID: {t.id}</span>
                       {t.chapter_id && <span>章节 #{t.chapter_id}</span>}
-                      <span>{formatTime(t.created_at)}</span>
+                      <span>{fmt(t.created_at)}</span>
                     </div>
                     {isActive && (
-                      <div className="mt-2 w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-500 animate-gradient"
-                          style={{ width: `${Math.max(t.progress * 100, 5)}%`, backgroundSize: '300% 300%' }}
-                        />
+                      <div style={{ marginTop: 12, height: 4, background: 'var(--surface-alt)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%', borderRadius: 2,
+                          background: `linear-gradient(90deg, ${st.color}, ${st.color}99)`,
+                          width: `${Math.max(t.progress * 100, 8)}%`,
+                          transition: 'width 0.6s ease',
+                        }} />
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-1">
+                  <div style={{ display: 'flex', gap: 6 }}>
                     {isActive && (
-                      <button onClick={() => handleCancel(t.id)} className="px-2 py-1 rounded text-[11px] bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors">
-                        取消
-                      </button>
+                      <button onClick={() => handleCancel(t.id)} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 14px',
+                        borderRadius: 8, border: '1px solid var(--error-border, #F0C0B8)', background: 'var(--error-bg)', color: 'var(--error)',
+                        fontFamily: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
+                      }}>取消</button>
                     )}
                     {(t.status === 'failed' || t.status === 'cancelled') && (
-                      <button onClick={() => handleRetry(t.id)} className="flex items-center gap-1 px-2 py-1 rounded text-[11px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-colors">
-                        <Play size={10} /> 重试
+                      <button onClick={() => handleRetry(t.id)} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 14px',
+                        borderRadius: 8, border: '1px solid var(--accent-border)', background: 'var(--accent-light)', color: 'var(--accent)',
+                        fontFamily: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
+                      }}>
+                        <Play size={11} /> 重试
                       </button>
                     )}
                   </div>
                 </div>
                 {t.error && (
-                  <div className="mt-2 text-[11px] text-red-400 bg-red-500/5 rounded-lg px-2 py-1">{t.error}</div>
+                  <div style={{ marginTop: 10, padding: '8px 14px', borderRadius: 8, background: 'var(--error-bg)', fontSize: 12, color: 'var(--error)', lineHeight: 1.5 }}>
+                    {t.error}
+                  </div>
                 )}
               </div>
             );

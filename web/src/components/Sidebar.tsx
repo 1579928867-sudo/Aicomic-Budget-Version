@@ -14,47 +14,58 @@ export function Sidebar() {
   const { activePage, setActivePage } = useAppStore();
 
   return (
-    <aside className="w-56 h-screen bg-zinc-950 border-r border-zinc-800 flex flex-col shrink-0">
+    <aside style={{
+      width: 240, minHeight: '100vh', flexShrink: 0,
+      background: 'var(--surface-alt)', borderRight: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column',
+    }}>
       {/* Logo */}
-      <div className="p-5 border-b border-zinc-800">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-lg">
-            🎬
-          </div>
+      <div style={{ padding: '28px 20px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div style={{
+            width: 42, height: 42, borderRadius: 12,
+            background: 'var(--accent)', color: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 20,
+          }}>🎬</div>
           <div>
-            <div className="text-sm font-bold text-white tracking-tight">AI漫剧</div>
-            <div className="text-[10px] text-zinc-500">Comic Video Studio</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>AI漫剧</div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 1 }}>Comic Video Studio</div>
           </div>
         </div>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 py-3 px-3 space-y-1">
-        {NAV.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setActivePage(key)}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group ${
-              activePage === key
-                ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
-                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 border border-transparent'
-            }`}
-          >
-            <Icon size={18} className={activePage === key ? 'text-indigo-400' : 'text-zinc-500 group-hover:text-zinc-300'} />
-            <span className="font-medium">{label}</span>
-            {activePage === key && (
-              <div className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-400" />
-            )}
-          </button>
-        ))}
+      <nav style={{ flex: 1, padding: '8px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {NAV.map(({ key, label, icon: Icon }) => {
+          const active = activePage === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setActivePage(key)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                padding: '11px 16px', borderRadius: 10,
+                border: active ? '1px solid var(--accent-border)' : '1px solid transparent',
+                background: active ? 'var(--accent-light)' : 'transparent',
+                color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                fontSize: 14, fontWeight: 500,
+                cursor: 'pointer', transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}}
+              onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}}
+            >
+              <Icon size={18} style={{ opacity: active ? 1 : 0.55 }} />
+              <span>{label}</span>
+            </button>
+          );
+        })}
       </nav>
 
       {/* Footer */}
-      <div className="p-4 border-t border-zinc-800">
-        <div className="flex items-center gap-2 text-xs text-zinc-500">
-          <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          v0.1.0
-        </div>
+      <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success)' }} />
+        <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>v0.2 · 运行中</span>
       </div>
     </aside>
   );

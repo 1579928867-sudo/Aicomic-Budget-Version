@@ -8,12 +8,8 @@ import { SettingsPage } from './pages/SettingsPage';
 import { useAppStore } from './stores/app';
 
 const PAGES: Record<string, React.ComponentType> = {
-  chat: ChatPage,
-  library: LibraryPage,
-  videos: VideosPage,
-  cookie: CookiePage,
-  tasks: TasksPage,
-  settings: SettingsPage,
+  chat: ChatPage, library: LibraryPage, videos: VideosPage,
+  cookie: CookiePage, tasks: TasksPage, settings: SettingsPage,
 };
 
 export default function App() {
@@ -21,9 +17,9 @@ export default function App() {
   const Page = PAGES[activePage] || ChatPage;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-zinc-950">
+    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
       <Sidebar />
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-auto" style={{ padding: '40px' }}>
         <Page />
       </main>
     </div>

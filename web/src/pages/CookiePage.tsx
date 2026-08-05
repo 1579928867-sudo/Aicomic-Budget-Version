@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Cookie, CheckCircle2, XCircle, Save, ExternalLink, Copy, Key } from 'lucide-react';
+import { Cookie, CheckCircle2, XCircle, Save, Copy, Key, ClipboardPaste } from 'lucide-react';
 import { settings } from '../api';
 
 export function CookiePage() {
@@ -14,65 +14,79 @@ export function CookiePage() {
   const handleSave = async () => {
     try {
       await fetch('/api/settings/cookie', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value: cookieInput }),
       });
-      setSaved(true);
-      setCookieValid(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      console.error(e);
-    }
+      setSaved(true); setCookieValid(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) { console.error(e); }
   };
 
   const steps = [
-    { icon: '1', text: '打开豆包/即梦网站', sub: '访问 jimeng.jianying.com', link: 'https://jimeng.jianying.com' },
-    { icon: '2', text: '登录你的账号', sub: '确保已登录豆包账号' },
-    { icon: '3', text: '打开开发者工具', sub: '按 F12 或 Ctrl+Shift+I' },
-    { icon: '4', text: '找到 Cookies', sub: 'Application → Cookies → 复制全部' },
+    { step: 1, title: '打开豆包网站', desc: '在浏览器中访问 www.doubao.com', link: 'https://www.doubao.com', linkLabel: '打开豆包' },
+    { step: 2, title: '登录你的豆包账号', desc: '确保已经成功登录，可以使用 AI 生图功能' },
+    { step: 3, title: '打开浏览器开发者工具', desc: '按键盘上的 F12 或 Ctrl+Shift+I 打开 DevTools' },
+    { step: 4, title: '找到并复制 Cookies', desc: '在顶部标签栏点击 "Application"（应用程序），左侧菜单找到 "Cookies"，点击域名，然后全选复制右侧显示的 Cookie 内容' },
   ];
 
   return (
-    <div className="max-w-2xl mx-auto p-6">
-      <div className="mb-6">
-        <h1 className="text-xl font-bold text-white mb-1">豆包 Cookie 配置</h1>
-        <p className="text-sm text-zinc-500">配置豆包Cookie以使用AI图片和视频生成功能</p>
+    <div style={{ maxWidth: 640, margin: '0 auto' }}>
+      <div style={{ marginBottom: 32 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', marginBottom: 6 }}>豆包 Cookie 配置</h1>
+        <p style={{ fontSize: 14, color: 'var(--text-tertiary)' }}>配置豆包 Cookie 以使用 AI 图片和视频生成功能</p>
       </div>
 
       {/* Status */}
-      <div className={`glass-card p-4 mb-6 flex items-center gap-3 ${cookieValid ? 'border-emerald-500/30' : 'border-red-500/30'}`}>
-        {cookieValid ? (
-          <CheckCircle2 size={20} className="text-emerald-400" />
-        ) : (
-          <XCircle size={20} className="text-red-400" />
-        )}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 14, padding: '18px 22px',
+        borderRadius: 14, marginBottom: 28,
+        background: cookieValid ? 'var(--success-bg)' : 'var(--error-bg)',
+        border: `1px solid ${cookieValid ? 'var(--success)' : 'var(--error)'}20`,
+      }}>
+        {cookieValid ? <CheckCircle2 size={22} style={{ color: 'var(--success)' }} /> : <XCircle size={22} style={{ color: 'var(--error)' }} />}
         <div>
-          <div className={`text-sm font-semibold ${cookieValid ? 'text-emerald-400' : 'text-red-400'}`}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: cookieValid ? 'var(--success)' : 'var(--error)' }}>
             {cookieValid ? 'Cookie 已配置' : 'Cookie 未配置'}
           </div>
-          <div className="text-xs text-zinc-500">
-            {cookieValid ? '图片和视频生成功能可用' : '需要配置Cookie才能使用生成功能'}
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>
+            {cookieValid ? '图片和视频生成功能可用' : '需要配置 Cookie 才能使用 AI 生成功能'}
           </div>
         </div>
       </div>
 
       {/* Guide */}
-      <div className="glass-card p-5 mb-6">
-        <h3 className="text-sm font-semibold text-white mb-4">📋 配置步骤</h3>
-        <div className="space-y-4">
+      <div style={{
+        background: 'var(--surface)', border: '1px solid var(--border)',
+        borderRadius: 16, padding: '24px 28px', marginBottom: 28,
+      }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 22 }}>
+          📋 配置步骤
+        </h3>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
           {steps.map((s, i) => (
-            <div key={i} className="flex gap-3">
-              <div className="w-7 h-7 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                <span className="text-xs font-bold text-indigo-400">{s.icon}</span>
+            <div key={i} style={{ display: 'flex', gap: 16 }}>
+              {/* Timeline */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 28, flexShrink: 0 }}>
+                <div style={{
+                  width: 28, height: 28, borderRadius: '50%',
+                  background: 'var(--accent)', color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 13, fontWeight: 700,
+                }}>{s.step}</div>
+                {i < steps.length - 1 && <div style={{ width: 1, flex: 1, minHeight: 16, background: 'var(--border)', margin: '4px 0' }} />}
               </div>
-              <div className="flex-1">
-                <div className="text-sm text-zinc-200">{s.text}</div>
-                <div className="text-xs text-zinc-500 mt-0.5">
-                  {s.sub}
+              {/* Content */}
+              <div style={{ paddingBottom: 28 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{s.title}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  {s.desc}
                   {s.link && (
-                    <a href={s.link} target="_blank" className="ml-2 text-indigo-400 hover:underline inline-flex items-center gap-1">
-                      打开 <ExternalLink size={10} />
+                    <a href={s.link} target="_blank" rel="noopener" style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                      marginLeft: 10, color: 'var(--accent)', fontWeight: 500,
+                      textDecoration: 'none', fontSize: 12,
+                    }}>
+                      {s.linkLabel} →
                     </a>
                   )}
                 </div>
@@ -83,33 +97,64 @@ export function CookiePage() {
       </div>
 
       {/* Input */}
-      <div className="glass-card p-5">
-        <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-          <Key size={16} className="text-indigo-400" />
+      <div style={{
+        background: 'var(--surface)', border: '1px solid var(--border)',
+        borderRadius: 16, padding: '24px 28px',
+      }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Key size={17} style={{ color: 'var(--accent)' }} />
           粘贴 Cookie
         </h3>
+        <p style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 16 }}>将上一步复制的 Cookie 内容粘贴到下方</p>
         <textarea
           value={cookieInput}
           onChange={e => setCookieInput(e.target.value)}
-          placeholder='粘贴从浏览器复制的Cookie JSON...'
-          className="w-full h-32 bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50 transition-colors resize-none font-mono"
+          placeholder='[{"name":"session","value":"abc123..."},{"name":"token","value":"xyz..."}]'
+          style={{
+            width: '100%', height: 120, padding: '14px 16px',
+            borderRadius: 12, border: '1px solid var(--border)',
+            background: 'var(--bg)', color: 'var(--text)',
+            fontFamily: 'JetBrains Mono, monospace', fontSize: 12, lineHeight: 1.6,
+            resize: 'vertical', outline: 'none', transition: 'border-color 0.15s',
+          }}
+          onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
+          onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}
         />
-        <div className="flex gap-2 mt-3">
+        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
           <button
             onClick={handleSave}
             disabled={!cookieInput.trim()}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-500 text-white text-sm font-medium hover:bg-indigo-400 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              padding: '9px 22px', borderRadius: 10,
+              border: 'none', background: 'var(--accent)', color: '#fff',
+              fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+              cursor: cookieInput.trim() ? 'pointer' : 'not-allowed',
+              opacity: cookieInput.trim() ? 1 : 0.4,
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { if (cookieInput.trim()) e.currentTarget.style.background = 'var(--accent-hover)'; }}
+            onMouseLeave={e => { if (cookieInput.trim()) e.currentTarget.style.background = 'var(--accent)'; }}
           >
-            {saved ? <CheckCircle2 size={16} /> : <Save size={16} />}
+            {saved ? <CheckCircle2 size={15} /> : <Save size={15} />}
             {saved ? '已保存' : '保存 Cookie'}
           </button>
           <button
             onClick={async () => {
-              try { const t = await navigator.clipboard.readText(); setCookieInput(t); } catch {}
+              try { setCookieInput(await navigator.clipboard.readText()); } catch { /* permission denied */ }
             }}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-700 text-zinc-300 text-sm hover:bg-zinc-600 transition-colors"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              padding: '9px 22px', borderRadius: 10,
+              border: '1px solid var(--border)', background: 'var(--surface)',
+              color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
+              cursor: 'pointer', transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; }}
           >
-            <Copy size={16} /> 从剪贴板粘贴
+            <ClipboardPaste size={15} />
+            从剪贴板读取
           </button>
         </div>
       </div>

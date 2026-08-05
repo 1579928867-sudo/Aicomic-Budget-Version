@@ -27,23 +27,38 @@ export function VideosPage() {
   }, [selectedChapterId]);
 
   const activeChapter = chapters.find(c => c.id === selectedChapterId);
+  const mediaBase = 'http://localhost:8000/';
 
   return (
-    <div className="flex h-full">
+    <div style={{ height: '100%', display: 'flex', gap: 0 }}>
       {/* Side Panel */}
-      <div className="w-56 border-r border-zinc-800 p-4 space-y-2 overflow-auto shrink-0 bg-zinc-950/50">
-        <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider px-1 mb-2">选择章节</h3>
+      <div style={{ width: 220, flexShrink: 0, padding: '0 24px 0 0', borderRight: '1px solid var(--border)', overflow: 'auto' }}>
+        <h3 style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 12 }}>
+          选择章节
+        </h3>
         {novels.map(n => (
-          <div key={n.id}>
+          <div key={n.id} style={{ marginBottom: 4 }}>
             <button
               onClick={() => setSelectedNovelId(n.id === selectedNovelId ? null : n.id)}
-              className={`w-full text-left px-2 py-1.5 rounded text-xs font-medium ${selectedNovelId === n.id ? 'text-indigo-400' : 'text-zinc-500'}`}
+              style={{
+                width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 8,
+                border: 'none', background: 'transparent', fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+                color: selectedNovelId === n.id ? 'var(--accent)' : 'var(--text-secondary)',
+                cursor: 'pointer', transition: 'all 0.12s',
+              }}
             >{n.title}</button>
             {selectedNovelId === n.id && chapters.map(c => (
               <button
                 key={c.id}
                 onClick={() => setSelectedChapterId(c.id)}
-                className={`w-full text-left pl-4 pr-2 py-1.5 rounded text-xs ${selectedChapterId === c.id ? 'bg-emerald-500/10 text-emerald-400' : 'text-zinc-400 hover:bg-zinc-800/50'}`}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '7px 12px 7px 24px', borderRadius: 8,
+                  border: selectedChapterId === c.id ? '1px solid var(--accent-border)' : '1px solid transparent',
+                  background: selectedChapterId === c.id ? 'var(--accent-light)' : 'transparent',
+                  fontFamily: 'inherit', fontSize: 13, cursor: 'pointer',
+                  color: selectedChapterId === c.id ? 'var(--accent)' : 'var(--text-tertiary)',
+                  transition: 'all 0.12s',
+                }}
               >第{c.chapter_num}章</button>
             ))}
           </div>
@@ -51,87 +66,142 @@ export function VideosPage() {
       </div>
 
       {/* Main */}
-      <div className="flex-1 overflow-auto p-6">
+      <div style={{ flex: 1, overflow: 'auto', padding: '0 0 0 40px' }}>
         {!selectedChapterId ? (
-          <div className="h-full flex items-center justify-center">
-            <div className="text-center text-zinc-600">
-              <Film size={48} className="mx-auto mb-3 opacity-30" />
-              <p className="text-sm">选择章节查看视频</p>
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ textAlign: 'center', color: 'var(--text-tertiary)' }}>
+              <Film size={44} style={{ marginBottom: 12, opacity: 0.35 }} />
+              <p style={{ fontSize: 14 }}>选择章节查看视频</p>
             </div>
           </div>
         ) : loading ? (
-          <div className="flex justify-center py-12"><Loader2 className="animate-spin text-indigo-400" size={24} /></div>
+          <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 60 }}>
+            <Loader2 size={24} style={{ color: 'var(--accent)', animation: 'spin 0.7s linear infinite' }} />
+          </div>
         ) : (
           <>
-            {/* Final Video */}
+            {/* Final Video — hero treatment */}
             {finals.length > 0 && (
-              <div className="mb-6">
-                <h2 className="text-lg font-bold text-white mb-3">
-                  🎞️ 第{activeChapter?.chapter_num}章 成品视频
-                </h2>
-                <div className="glass-card p-1 overflow-hidden max-w-2xl">
+              <div style={{ marginBottom: 40 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 20 }}>
+                  <h2 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)' }}>
+                    第{activeChapter?.chapter_num}章 成品视频
+                  </h2>
+                  <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>
+                    {finals[0].file_path?.split(/[\\/]/).pop()}
+                  </span>
+                </div>
+
+                {/* Hero Video Card */}
+                <div style={{
+                  background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 18, overflow: 'hidden', maxWidth: 680,
+                  boxShadow: 'var(--shadow-md)',
+                }}>
                   {activeVideo === finals[0].file_path ? (
                     <video
-                      src={`http://localhost:8000/${finals[0].file_path.replace(/\\/g, '/')}`}
-                      controls
-                      autoPlay
-                      className="w-full rounded-lg"
-                      style={{ maxHeight: 400 }}
+                      src={mediaBase + finals[0].file_path.replace(/\\/g, '/')}
+                      controls autoPlay
+                      style={{ width: '100%', display: 'block' }}
                     />
                   ) : (
                     <div
-                      className="aspect-video bg-zinc-900 rounded-lg flex items-center justify-center cursor-pointer group relative"
                       onClick={() => setActiveVideo(finals[0].file_path)}
+                      style={{
+                        aspectRatio: '16/9', background: '#1a1a1a',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        cursor: 'pointer', position: 'relative',
+                      }}
                     >
-                      <div className="w-16 h-16 rounded-full bg-indigo-500/20 flex items-center justify-center group-hover:bg-indigo-500/40 transition-all">
-                        <Play size={28} className="text-indigo-400 ml-1" />
+                      <div style={{
+                        width: 64, height: 64, borderRadius: '50%',
+                        background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        transition: 'transform 0.2s',
+                      }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+                      >
+                        <Play size={28} fill="#fff" color="#fff" style={{ marginLeft: 3 }} />
                       </div>
-                      <div className="absolute bottom-3 right-3 px-2 py-1 rounded bg-black/60 text-xs text-zinc-300">
-                        {finals[0].file_path}
-                      </div>
+                      <div style={{
+                        position: 'absolute', bottom: 16, right: 16,
+                        padding: '4px 12px', borderRadius: 8,
+                        background: 'rgba(0,0,0,0.55)', color: 'rgba(255,255,255,0.75)',
+                        fontSize: 12,
+                      }}>{finals[0].file_path?.split(/[\\/]/).pop()}</div>
                     </div>
                   )}
-                  <div className="flex gap-2 p-3">
+                  <div style={{ display: 'flex', gap: 10, padding: 16 }}>
                     <a
-                      href={`http://localhost:8000/${finals[0].file_path.replace(/\\/g, '/')}`}
+                      href={mediaBase + finals[0].file_path.replace(/\\/g, '/')}
                       download
-                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500 text-white text-xs font-medium hover:bg-indigo-400 transition-colors"
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 8,
+                        padding: '9px 20px', borderRadius: 10,
+                        background: 'var(--accent)', color: '#fff',
+                        fontSize: 13, fontWeight: 600, textDecoration: 'none',
+                        transition: 'all 0.15s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--accent-hover)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'var(--accent)'; }}
                     >
-                      <Download size={14} /> 下载
+                      <Download size={15} /> 下载成品
                     </a>
-                    <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-700 text-zinc-300 text-xs hover:bg-zinc-600 transition-colors">
-                      <RefreshCw size={14} /> 重新生成
+                    <button style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 8,
+                      padding: '9px 20px', borderRadius: 10,
+                      border: '1px solid var(--border)', background: 'var(--surface)',
+                      color: 'var(--text-secondary)', fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
+                      cursor: 'pointer', transition: 'all 0.15s',
+                    }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; }}
+                    >
+                      <RefreshCw size={15} /> 重新生成
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Shot Clips */}
+            {/* Shot Clips Grid */}
             {clips.length > 0 && (
               <div>
-                <h3 className="text-sm font-semibold text-zinc-400 mb-3">
-                  📹 分镜片段 ({clips.length})
+                <h3 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', marginBottom: 18 }}>
+                  分镜片段 · {clips.length} 个
                 </h3>
-                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
                   {clips.map(c => (
-                    <div key={c.id} className="glass-card p-3 group">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded bg-indigo-500/10 text-[11px] font-bold text-indigo-400 flex items-center justify-center">
-                            {c.shot_num}
-                          </span>
-                          <span className="text-xs text-zinc-400">{c.duration_sec}s</span>
+                    <div key={c.id} style={{
+                      background: 'var(--surface)', border: '1px solid var(--border)',
+                      borderRadius: 14, padding: 14,
+                      transition: 'box-shadow 0.2s',
+                    }}
+                      onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--shadow-md)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{
+                            width: 28, height: 28, borderRadius: 8,
+                            background: 'var(--accent-light)', color: 'var(--accent)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 12, fontWeight: 700,
+                          }}>{c.shot_num}</span>
+                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{c.duration_sec}s</span>
                         </div>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${c.status === 'done' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-zinc-700/30 text-zinc-500'}`}>
-                          {c.status}
-                        </span>
+                        <span style={{
+                          fontSize: 10, fontWeight: 600, padding: '2px 10px', borderRadius: 100,
+                          ...(c.status === 'done'
+                            ? { background: 'var(--success-bg)', color: 'var(--success)' }
+                            : { background: 'var(--surface-alt)', color: 'var(--text-tertiary)' }),
+                        }}>{c.status}</span>
                       </div>
                       <video
-                        src={`http://localhost:8000/${c.file_path.replace(/\\/g, '/')}`}
+                        src={mediaBase + c.file_path.replace(/\\/g, '/')}
                         controls
-                        className="w-full rounded-lg"
-                        style={{ maxHeight: 160 }}
+                        style={{ width: '100%', borderRadius: 10, display: 'block' }}
                       />
                     </div>
                   ))}
@@ -140,9 +210,9 @@ export function VideosPage() {
             )}
 
             {clips.length === 0 && finals.length === 0 && (
-              <div className="text-center py-12 text-zinc-600">
-                <Film size={32} className="mx-auto mb-2 opacity-30" />
-                <p className="text-sm">暂无视频</p>
+              <div style={{ textAlign: 'center', paddingTop: 60, color: 'var(--text-tertiary)' }}>
+                <Film size={36} style={{ marginBottom: 10, opacity: 0.3 }} />
+                <p style={{ fontSize: 14 }}>暂无视频，先生成章节后再来查看</p>
               </div>
             )}
           </>

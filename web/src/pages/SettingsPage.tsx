@@ -1,81 +1,223 @@
 import { useState, useEffect } from 'react';
-import { Settings, Key, Zap, Server, CheckCircle2 } from 'lucide-react';
+import { Settings, Zap, Server, Key, ShieldAlert, CheckCircle2, Save } from 'lucide-react';
 import { settings } from '../api';
 
 export function SettingsPage() {
   const [llmConfig, setLlmConfig] = useState<any>(null);
   const [health, setHealth] = useState<any>(null);
+  const [backend, setBackend] = useState('deepseek');
+  const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    settings.llm().then(setLlmConfig).catch(() => {});
+    settings.llm().then(c => {
+      setLlmConfig(c);
+      setBackend(c.backend || 'deepseek');
+      setModel(c.model || '');
+      setBaseUrl(c.base_url || '');
+    }).catch(() => {});
     fetch('/api/health').then(r => r.json()).then(setHealth).catch(() => {});
   }, []);
 
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/settings/llm', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          backend, api_key: apiKey, model,
+          base_url: baseUrl,
+        }),
+      });
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 3000);
+        // 重新加载脱敏后的配置
+        settings.llm().then(setLlmConfig).catch(() => {});
+      }
+    } catch {}
+    setSaving(false);
+  };
+
   return (
-    <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-xl font-bold text-white mb-6">系统设置</h1>
+    <div style={{ maxWidth: 600, margin: '0 auto' }}>
+      <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', marginBottom: 28 }}>系统设置</h1>
 
       {/* System Status */}
-      <div className="glass-card p-5 mb-4">
-        <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <Server size={16} className="text-indigo-400" /> 系统状态
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: '22px 28px', marginBottom: 20 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Server size={16} style={{ color: 'var(--accent)' }} /> 系统状态
         </h3>
-        <div className="grid grid-cols-2 gap-3">
-          <StatusItem label="API 服务" ok={!!health} detail={health?.version} />
-          <StatusItem label="AI引擎就绪" ok={health?.orchestrator_ready} detail={health?.orchestrator_ready ? '已就绪' : '未就绪'} />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <StatusItem label="API 服务" ok={!!health} detail={health?.version || '未知'} />
+          <StatusItem label="AI 引擎" ok={health?.orchestrator_ready} detail={health?.orchestrator_ready ? '已就绪' : '未就绪'} />
         </div>
       </div>
 
-      {/* LLM Config */}
-      <div className="glass-card p-5 mb-4">
-        <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <Zap size={16} className="text-amber-400" /> LLM 配置
+      {/* LLM Config — editable */}
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: '24px 28px', marginBottom: 20 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Zap size={16} style={{ color: '#D49B4A' }} /> LLM 配置
         </h3>
-        {llmConfig && (
-          <div className="space-y-3">
-            <ConfigRow label="后端" value={llmConfig.backend?.toUpperCase()} />
-            <ConfigRow label="模型" value={llmConfig.model} />
-            <ConfigRow label="API Key" value={llmConfig.api_key || '未配置'} />
-          </div>
-        )}
-        <p className="text-[11px] text-zinc-600 mt-4">
-          修改 LLM 配置请编辑 config/settings.yaml 或设置环境变量后重启服务
+        <p style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 20 }}>
+          配置你自己的大模型 API，每个人的 Key 独立存储，不会共享
         </p>
+
+        {/* Notice */}
+        <div style={{ display: 'flex', gap: 10, padding: '12px 16px', borderRadius: 10, background: '#FDF5E8', border: '1px solid #F0D0A0', marginBottom: 20 }}>
+          <ShieldAlert size={16} style={{ color: '#D49B4A', flexShrink: 0, marginTop: 1 }} />
+          <div style={{ fontSize: 12, color: '#8A6A30', lineHeight: 1.6 }}>
+            你的 API Key 仅存储在你的本地服务器配置文件 <code style={{ background: 'rgba(0,0,0,0.06)', padding: '1px 6px', borderRadius: 3, fontSize: 11 }}>config/settings.yaml</code> 中，不会被其他人看到或使用。
+          </div>
+        </div>
+
+        {/* Backend */}
+        <label style={{ display: 'block', marginBottom: 14 }}>
+          <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>LLM 后端</span>
+          <select
+            value={backend}
+            onChange={e => setBackend(e.target.value)}
+            style={{
+              width: '100%', padding: '10px 14px', borderRadius: 10,
+              border: '1px solid var(--border)', background: 'var(--surface)',
+              color: 'var(--text)', fontFamily: 'inherit', fontSize: 14, outline: 'none',
+              cursor: 'pointer', transition: 'border-color 0.15s',
+            }}
+            onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
+            onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}
+          >
+            <option value="deepseek">DeepSeek</option>
+            <option value="claude">Claude (Anthropic)</option>
+          </select>
+        </label>
+
+        {/* API Key */}
+        <label style={{ display: 'block', marginBottom: 14 }}>
+          <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
+            API Key
+            {llmConfig?.has_key && <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-tertiary)', marginLeft: 8 }}>当前: {llmConfig?.api_key_masked}</span>}
+          </span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={e => setApiKey(e.target.value)}
+              placeholder={llmConfig?.has_key ? '输入新 Key 以替换，留空则保留当前' : '输入你的 API Key'}
+              style={{
+                flex: 1, padding: '10px 14px', borderRadius: 10,
+                border: '1px solid var(--border)', background: 'var(--surface)',
+                color: 'var(--text)', fontFamily: 'inherit', fontSize: 14,
+                outline: 'none', transition: 'border-color 0.15s',
+              }}
+              onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
+              onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}
+            />
+            <button
+              onClick={() => setShowKey(!showKey)}
+              style={{
+                padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)',
+                background: 'var(--surface)', color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 12,
+                cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.12s',
+              }}
+            >{showKey ? '隐藏' : '显示'}</button>
+          </div>
+        </label>
+
+        {/* Model */}
+        <label style={{ display: 'block', marginBottom: 14 }}>
+          <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>模型</span>
+          <input
+            type="text" value={model}
+            onChange={e => setModel(e.target.value)}
+            placeholder={backend === 'deepseek' ? 'deepseek-chat' : 'claude-sonnet-5-20251001'}
+            style={{
+              width: '100%', padding: '10px 14px', borderRadius: 10,
+              border: '1px solid var(--border)', background: 'var(--surface)',
+              color: 'var(--text)', fontFamily: 'inherit', fontSize: 14,
+              outline: 'none', transition: 'border-color 0.15s',
+            }}
+            onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
+            onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}
+          />
+        </label>
+
+        {/* Base URL (for DeepSeek-compatible) */}
+        {backend === 'deepseek' && (
+          <label style={{ display: 'block', marginBottom: 20 }}>
+            <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>API 地址 (可选)</span>
+            <input
+              type="text" value={baseUrl}
+              onChange={e => setBaseUrl(e.target.value)}
+              placeholder="https://api.deepseek.com"
+              style={{
+                width: '100%', padding: '10px 14px', borderRadius: 10,
+                border: '1px solid var(--border)', background: 'var(--surface)',
+                color: 'var(--text)', fontFamily: 'inherit', fontSize: 14,
+                outline: 'none', transition: 'border-color 0.15s',
+              }}
+              onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
+              onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)'; }}
+            />
+          </label>
+        )}
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            padding: '10px 24px', borderRadius: 10, border: 'none',
+            background: 'var(--accent)', color: '#fff',
+            fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
+            cursor: saving ? 'not-allowed' : 'pointer',
+            opacity: saving ? 0.5 : 1, transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { if (!saving) e.currentTarget.style.background = 'var(--accent-hover)'; }}
+          onMouseLeave={e => { if (!saving) e.currentTarget.style.background = 'var(--accent)'; }}
+        >
+          {saved ? <CheckCircle2 size={15} /> : <Save size={15} />}
+          {saved ? '已保存' : '保存配置'}
+        </button>
       </div>
 
-      {/* Performance */}
-      <div className="glass-card p-5">
-        <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-          <Key size={16} className="text-emerald-400" /> 关于
+      {/* About */}
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 16, padding: '22px 28px' }}>
+        <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Key size={16} style={{ color: 'var(--success)' }} /> 关于
         </h3>
-        <div className="space-y-3">
-          <ConfigRow label="版本" value="v0.1.0" />
-          <ConfigRow label="技术栈" value="FastAPI + React + SQLite" />
-          <ConfigRow label="图片引擎" value="豆包/即梦 Browser Automation" />
-          <ConfigRow label="LLM" value="DeepSeek / Claude" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Row label="版本" value="v0.2.0" />
+          <Row label="技术栈" value="FastAPI + React + SQLite" />
+          <Row label="图片引擎" value="豆包 Browser Automation" />
+          <Row label="LLM" value="DeepSeek / Claude (用户自配)" />
+          <Row label="字体" value="Noto Sans SC + Inter" />
         </div>
       </div>
     </div>
   );
 }
 
-function StatusItem({ label, ok, detail }: { label: string; ok: boolean; detail?: string }) {
+function StatusItem({ label, ok, detail }: { label: string; ok: boolean; detail: string }) {
   return (
-    <div className="flex items-center gap-2 p-3 rounded-lg bg-zinc-900/50 border border-zinc-800">
-      <div className={`w-2 h-2 rounded-full ${ok ? 'bg-emerald-400 pulse-glow' : 'bg-zinc-600'}`} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderRadius: 10, background: 'var(--surface-alt)', border: '1px solid var(--border)' }}>
+      <div style={{ width: 8, height: 8, borderRadius: '50%', background: ok ? 'var(--success)' : 'var(--text-tertiary)' }} />
       <div>
-        <div className="text-xs font-medium text-zinc-300">{label}</div>
-        <div className="text-[11px] text-zinc-500">{detail || (ok ? '正常' : '异常')}</div>
+        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>{label}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 1 }}>{detail}</div>
       </div>
     </div>
   );
 }
 
-function ConfigRow({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex justify-between items-center py-1.5 border-b border-zinc-800/50 last:border-0">
-      <span className="text-xs text-zinc-500">{label}</span>
-      <span className="text-xs text-zinc-200 font-mono">{value}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+      <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{label}</span>
+      <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 500 }}>{value}</span>
     </div>
   );
 }

@@ -11,30 +11,22 @@ async function request<T>(url: string, opts?: RequestInit): Promise<T> {
     const text = await res.text();
     throw new Error(`API ${res.status}: ${text}`);
   }
-  if (res.headers.get('content-type')?.includes('application/json')) {
-    return res.json();
-  }
+  if (res.headers.get('content-type')?.includes('application/json')) return res.json();
   return {} as T;
 }
 
 export const chat = {
   send: (body: { message: string; chapter_id?: number; novel_id?: number }) =>
-    request<{ reply: string; intent: string; task_id?: string }>('/chat/send', {
-      method: 'POST', body: JSON.stringify(body),
-    }),
+    request<{ reply: string; intent: string; task_id?: string }>('/chat/send', { method: 'POST', body: JSON.stringify(body) }),
   history: (chapter_id?: number) =>
     request<ChatMessage[]>(`/chat/history${chapter_id ? `?chapter_id=${chapter_id}` : ''}`),
 };
 
 export const pipeline = {
   run: (chapter_id: number, with_images = false, with_video = false) =>
-    request<{ task_id: string; events_url: string }>('/pipeline/run', {
-      method: 'POST', body: JSON.stringify({ chapter_id, with_images, with_video }),
-    }),
+    request<{ task_id: string; events_url: string }>('/pipeline/run', { method: 'POST', body: JSON.stringify({ chapter_id, with_images, with_video }) }),
   cancel: (task_id: string) =>
-    request<{ status: string }>('/pipeline/cancel', {
-      method: 'POST', body: JSON.stringify({ task_id }),
-    }),
+    request<{ status: string }>('/pipeline/cancel', { method: 'POST', body: JSON.stringify({ task_id }) }),
 };
 
 export const library = {
@@ -48,9 +40,7 @@ export const library = {
 
 export const agents = {
   run: (body: { agent: string; target_type: string; target_id: number; extra?: string; chapter_id?: number }) =>
-    request<{ task_id: string; events_url: string }>('/agents/run', {
-      method: 'POST', body: JSON.stringify(body),
-    }),
+    request<{ task_id: string; events_url: string }>('/agents/run', { method: 'POST', body: JSON.stringify(body) }),
 };
 
 export const videos = {
@@ -67,5 +57,7 @@ export const tasks = {
 
 export const settings = {
   cookieStatus: () => request<{ valid: boolean }>('/settings/cookie-status'),
-  llm: () => request<any>('/settings/llm'),
+  llm: () => request<{ backend: string; model: string; api_key_masked: string; has_key: boolean; base_url: string }>('/settings/llm'),
+  saveLlm: (body: { backend: string; api_key: string; model: string; base_url: string }) =>
+    request<{ status: string; api_key_masked: string }>('/settings/llm', { method: 'POST', body: JSON.stringify(body) }),
 };

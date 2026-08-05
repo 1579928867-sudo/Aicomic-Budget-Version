@@ -1,13 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body, #root { height: 100%; }
-body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  background: #09090b;
-  color: #f1f1f3;
+:root {
+  --bg: #FAFAF8;
+  --surface: #FFFFFF;
+  --surface-alt: #F5F3F0;
+  --surface-hover: #EEECE8;
+  --border: #E6E3DE;
+  --border-hover: #C5C0B8;
+  --text: #1C1C1C;
+  --text-secondary: #5C5A57;
+  --text-tertiary: #9C9994;
+  --accent: #D4794A;
+  --accent-hover: #C0683A;
+  --accent-light: #FDF0E8;
+  --accent-border: #F0D0B8;
+  --success: #5B8C5A;
+  --success-bg: #EDF5EC;
+  --error: #C45C4C;
+  --error-bg: #FDF0ED;
+  --warning: #D49B4A;
+  --warning-bg: #FDF5E8;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.06);
+  --shadow-lg: 0 8px 28px rgba(0,0,0,0.09);
+
+  font-family: 'Noto Sans SC', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  background: var(--bg);
 }
 
-::-webkit-scrollbar { width: 6px; }
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #3a3a45; border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: #D5D3CC; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #B5B3AC; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

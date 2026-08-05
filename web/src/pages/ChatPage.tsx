@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Upload, Loader2, Bot, User, Sparkles } from 'lucide-react';
+import { Send, Loader2, Bot, User, Sparkles, Paperclip } from 'lucide-react';
 import { chat } from '../api';
 import { useAppStore } from '../stores/app';
 
@@ -11,7 +11,7 @@ interface Message {
 
 export function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([
-    { id: 0, role: 'assistant', content: '你好！我是AI漫剧助手 🎬\n\n我可以帮你：\n• 生成新的漫画章节\n• 重新生成角色/场景图片\n• 查询素材信息\n• 管理视频制作\n\n请告诉我你想做什么？' },
+    { id: 0, role: 'assistant', content: '你好！我是 AI漫剧助手 🎬\n\n我可以帮你：\n• 生成新的漫画章节\n• 重新生成角色 / 场景图片\n• 查询素材信息\n• 管理视频制作\n\n请告诉我你想做什么？' },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -26,15 +26,12 @@ export function ChatPage() {
     setInput('');
     setMessages(prev => [...prev, { id: Date.now(), role: 'user', content: msg }]);
     setLoading(true);
-
     try {
       const res = await chat.send({ message: msg, chapter_id: chapterId ?? undefined });
       setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', content: res.reply }]);
     } catch (e: any) {
       setMessages(prev => [...prev, { id: Date.now() + 1, role: 'assistant', content: `抱歉，出错了: ${e.message}` }]);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -42,19 +39,19 @@ export function ChatPage() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', maxWidth: 780, margin: '0 auto' }}>
       {/* Header */}
-      <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-            <Sparkles size={16} className="text-white" />
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Sparkles size={20} />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white">AI漫剧助手</h1>
-            <p className="text-xs text-zinc-500">智能对话 · 意图识别 · 一键生成</p>
+            <h1 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>AI漫剧助手</h1>
+            <p style={{ fontSize: 13, color: 'var(--text-tertiary)', marginTop: 2 }}>智能对话 · 意图识别 · 一键生成</p>
           </div>
           {chapterId && (
-            <span className="ml-auto px-3 py-1 rounded-full bg-indigo-500/10 text-indigo-400 text-xs border border-indigo-500/20">
+            <span style={{ marginLeft: 'auto', padding: '4px 14px', borderRadius: 100, background: 'var(--accent-light)', color: 'var(--accent)', fontSize: 12, fontWeight: 600, border: '1px solid var(--accent-border)' }}>
               当前章节 #{chapterId}
             </span>
           )}
@@ -62,35 +59,40 @@ export function ChatPage() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
+      <div style={{ flex: 1, overflow: 'auto', padding: '0 0 20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
         {messages.map(msg => (
-          <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+          <div key={msg.id} style={{ display: 'flex', gap: 12, justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
             {msg.role === 'assistant' && (
-              <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                <Bot size={16} className="text-indigo-400" />
+              <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--accent-light)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                <Bot size={17} style={{ color: 'var(--accent)' }} />
               </div>
             )}
-            <div className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
-              msg.role === 'user'
-                ? 'bg-indigo-500 text-white rounded-br-md'
-                : 'bg-zinc-800/50 border border-zinc-700/50 text-zinc-200 rounded-bl-md'
-            }`}>
+            <div style={{
+              maxWidth: '72%', borderRadius: 16, padding: '14px 18px',
+              fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap',
+              ...(msg.role === 'user' ? {
+                background: 'var(--accent)', color: '#fff', borderBottomRightRadius: 6,
+              } : {
+                background: 'var(--surface)', color: 'var(--text-secondary)',
+                border: '1px solid var(--border)', borderBottomLeftRadius: 6,
+              }),
+            }}>
               {msg.content}
             </div>
             {msg.role === 'user' && (
-              <div className="w-8 h-8 rounded-lg bg-zinc-700 border border-zinc-600 flex items-center justify-center shrink-0">
-                <User size={16} className="text-zinc-300" />
+              <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--surface-alt)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                <User size={17} style={{ color: 'var(--text-secondary)' }} />
               </div>
             )}
           </div>
         ))}
         {loading && (
-          <div className="flex gap-3">
-            <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
-              <Bot size={16} className="text-indigo-400" />
+          <div style={{ display: 'flex', gap: 12 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--accent-light)', border: '1px solid var(--accent-border)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Bot size={17} style={{ color: 'var(--accent)' }} />
             </div>
-            <div className="bg-zinc-800/50 border border-zinc-700/50 rounded-2xl rounded-bl-md px-4 py-3">
-              <Loader2 size={18} className="text-indigo-400 animate-spin" />
+            <div style={{ padding: '14px 18px', borderRadius: 16, borderBottomLeftRadius: 6, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+              <Loader2 size={18} style={{ color: 'var(--accent)', animation: 'spin 0.7s linear infinite' }} />
             </div>
           </div>
         )}
@@ -98,27 +100,50 @@ export function ChatPage() {
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-zinc-800 bg-zinc-950/80 backdrop-blur-sm">
-        <div className="flex gap-2">
-          <button className="p-2.5 rounded-xl bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors">
-            <Upload size={18} />
+      <div style={{ padding: '20px 0 0', borderTop: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button style={{
+            width: 42, height: 42, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '1px solid var(--border)', background: 'var(--surface)',
+            color: 'var(--text-tertiary)', cursor: 'pointer', transition: 'all 0.15s',
+          }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text-tertiary)'; }}
+          >
+            <Paperclip size={18} />
           </button>
-          <div className="flex-1 relative">
+          <div style={{ flex: 1, position: 'relative' }}>
             <input
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="输入消息，Enter 发送..."
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500/50 transition-colors"
+              placeholder="输入消息，Enter 发送…"
+              style={{
+                width: '100%', padding: '11px 48px 11px 16px',
+                borderRadius: 12, border: '1px solid var(--border)',
+                background: 'var(--surface)', color: 'var(--text)',
+                fontFamily: 'inherit', fontSize: 14,
+                outline: 'none', transition: 'border-color 0.15s, box-shadow 0.15s',
+              }}
+              onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 3px var(--accent-light)'; }}
+              onBlur={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.boxShadow = 'none'; }}
             />
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-zinc-600">
+            <span style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', fontSize: 10, color: 'var(--text-tertiary)', pointerEvents: 'none' }}>
               Enter ↵
             </span>
           </div>
           <button
             onClick={handleSend}
             disabled={!input.trim() || loading}
-            className="p-2.5 rounded-xl bg-indigo-500 text-white hover:bg-indigo-400 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            style={{
+              width: 42, height: 42, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: 'none', background: 'var(--accent)', color: '#fff',
+              cursor: !input.trim() || loading ? 'not-allowed' : 'pointer',
+              opacity: !input.trim() || loading ? 0.4 : 1,
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { if (!(!input.trim() || loading)) e.currentTarget.style.background = 'var(--accent-hover)'; }}
+            onMouseLeave={e => { if (!(!input.trim() || loading)) e.currentTarget.style.background = 'var(--accent)'; }}
           >
             <Send size={18} />
           </button>
