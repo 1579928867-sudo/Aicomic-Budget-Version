@@ -138,7 +138,8 @@ export default function HomePage() {
 
       // Position on sphere surface
       card.position.set(x * SPHERE_RADIUS, y * SPHERE_RADIUS, z * SPHERE_RADIUS);
-      card.lookAt(0, 0, 0);
+      // Face outward from sphere center (so texture reads correctly from outside)
+      card.lookAt(x * SPHERE_RADIUS * 3, y * SPHERE_RADIUS * 3, z * SPHERE_RADIUS * 3);
 
       scene.add(card);
       cards.push(card);
@@ -182,8 +183,9 @@ export default function HomePage() {
         const nz = p.x * sinA + p.z * cosA;
         p.set(nx, p.y, nz);
 
-        // Face outward from center
-        card.lookAt(0, 0, 0);
+        // Face outward so texture reads correctly
+        const op = card.position;
+        card.lookAt(op.x * 3, op.y * 3, op.z * 3);
 
         // Opacity based on z-depth: closer to camera = more opaque
         const zNorm = (p.z + SPHERE_RADIUS) / (2 * SPHERE_RADIUS); // 0 (back) to 1 (front)

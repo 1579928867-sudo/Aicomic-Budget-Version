@@ -22,10 +22,10 @@ export function Sidebar() {
       display: 'flex', flexDirection: 'column',
       borderRight: '1px solid var(--border)',
     }}>
-      {/* Texture overlay for readability */}
+      {/* Texture overlay — deeper tone, more texture visible */}
       <div style={{
         position: 'absolute', inset: 0,
-        background: 'linear-gradient(180deg, rgba(250,248,245,0.93) 0%, rgba(245,243,240,0.96) 50%, rgba(240,237,232,0.97) 100%)',
+        background: 'linear-gradient(180deg, rgba(190,182,172,0.72) 0%, rgba(160,150,138,0.78) 50%, rgba(140,130,118,0.82) 100%)',
         zIndex: 0, pointerEvents: 'none',
       }} />
 
@@ -37,14 +37,14 @@ export function Sidebar() {
             style={{
               display: 'flex', alignItems: 'center', gap: 10,
               padding: '10px 14px', borderRadius: 10,
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-              color: 'var(--text-secondary)', fontFamily: 'inherit',
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.08)',
+              color: 'rgba(255,255,255,0.8)', fontFamily: 'inherit',
               fontSize: 13, fontWeight: 500, cursor: 'pointer',
               width: '100%', transition: 'all 0.15s',
             }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.14)'; e.currentTarget.style.color = '#fff'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = 'rgba(255,255,255,0.8)'; }}
           >
             <Home size={17} /> 返回首页
           </button>
@@ -57,11 +57,11 @@ export function Sidebar() {
               width: 42, height: 42, borderRadius: 12,
               background: 'var(--accent)', color: '#fff',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 20, boxShadow: 'var(--shadow-md)',
+              fontSize: 20, boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
             }}>🎬</div>
             <div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 }}>AI漫剧</div>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 1 }}>Comic Video Studio</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>AI漫剧</div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', marginTop: 1 }}>Comic Video Studio</div>
             </div>
           </div>
         </div>
@@ -77,16 +77,16 @@ export function Sidebar() {
                 style={{
                   display: 'flex', alignItems: 'center', gap: 12,
                   padding: '11px 16px', borderRadius: 10,
-                  border: active ? '1px solid var(--accent-border)' : '1px solid transparent',
-                  background: active ? 'var(--accent-light)' : 'transparent',
-                  color: active ? 'var(--accent)' : 'var(--text-secondary)',
+                  border: active ? '1px solid rgba(255,255,255,0.15)' : '1px solid transparent',
+                  background: active ? 'rgba(255,255,255,0.1)' : 'transparent',
+                  color: active ? '#fff' : 'rgba(255,255,255,0.6)',
                   fontSize: 14, fontWeight: 500, fontFamily: 'inherit',
                   cursor: 'pointer', transition: 'all 0.15s ease',
                 }}
-                onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text)'; }}}
-                onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}}
+                onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; e.currentTarget.style.color = 'rgba(255,255,255,0.9)'; }}}
+                onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.6)'; }}}
               >
-                <Icon size={18} style={{ opacity: active ? 1 : 0.55 }} />
+                <Icon size={18} style={{ opacity: active ? 1 : 0.5 }} />
                 <span>{label}</span>
               </button>
             );
@@ -94,9 +94,9 @@ export function Sidebar() {
         </nav>
 
         {/* Footer */}
-        <div style={{ position: 'relative', zIndex: 1, padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ position: 'relative', zIndex: 1, padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--success)' }} />
-          <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>v0.3 · 运行中</span>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>v0.3 · 运行中</span>
         </div>
       </div>
     </aside>
