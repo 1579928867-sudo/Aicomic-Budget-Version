@@ -168,6 +168,12 @@ def on_shutdown():
     if orch_db: orch_db.close()
 
 
+# ── 素材图片静态服务（必须在 / 之前注册）──
+data_dir = Path("data")
+if data_dir.exists():
+    app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
+
+# ── 前端静态文件 (必须在最后，作为 catch-all) ──
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists() and any(static_dir.iterdir()):
     app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 interface AppState {
-  activePage: string;
+  activePage: string;         // 'home' | 'chat' | 'library' | 'videos' | 'cookie' | 'tasks' | 'settings'
   setActivePage: (page: string) => void;
   selectedNovelId: number | null;
   setSelectedNovelId: (id: number | null) => void;
@@ -10,7 +10,7 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  activePage: 'chat',
+  activePage: 'home',
   setActivePage: (page) => set({ activePage: page }),
   selectedNovelId: null,
   setSelectedNovelId: (id) => set({ selectedNovelId: id, selectedChapterId: null }),
