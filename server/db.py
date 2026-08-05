@@ -207,3 +207,44 @@ class TaskStore:
             "SELECT * FROM task WHERE status IN ('pending', 'running') ORDER BY created_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def deduplicate_novels(conn: sqlite3.Connection) -> int:
+    """清理书名重复的 novel，把章节归并到最老的那条，删除重复 novel。
+
+    同名 novel（空格/标点忽略后匹配）→ 保留 ID 最小的，其余的被合并删除。
+
+    Returns: 被合并/删除的 novel 数量。
+    """
+    import re
+    rows = conn.execute("SELECT id, title FROM novel ORDER BY id").fetchall()
+    if not rows:
+        return 0
+
+    merged = 0
+    kept = {rows[0]["id"]}  # 第一条默认保留
+
+    for i in range(len(rows)):
+        if rows[i]["id"] in kept:
+            continue
+        title_a = re.sub(r'\s+', '', rows[i]["title"])
+        for j in range(i):
+            title_b = re.sub(r'\s+', '', rows[j]["title"])
+            # 模糊匹配: 去掉空格后完全相同, 或一个包含另一个
+            if (title_a == title_b
+                    or (len(title_a) > 2 and title_a in title_b)
+                    or (len(title_b) > 2 and title_b in title_a)):
+                src_id = rows[i]["id"]
+                dst_id = rows[j]["id"]  # 合并到较早的那条
+                # 移动所有章节
+                conn.execute("UPDATE chapter SET novel_id = ? WHERE novel_id = ?", (dst_id, src_id))
+                # 删除被合并的 novel
+                conn.execute("DELETE FROM novel WHERE id = ?", (src_id,))
+                merged += 1
+                break
+        else:
+            kept.add(rows[i]["id"])
+
+    if merged:
+        conn.commit()
+    return merged

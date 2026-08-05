@@ -183,3 +183,36 @@ def test_task_store_get_active():
 
     conn.close()
     db_path.unlink()
+
+
+def test_deduplicate_novels_merges_duplicates():
+    """同名 novel 自动合并章节: '逆天邪神' + '逆天邪神第1章 云澈' → 1条 novel."""
+    db_path = Path(tempfile.mktemp(suffix=".db"))
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS novel (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, author TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS chapter (id INTEGER PRIMARY KEY AUTOINCREMENT, novel_id INTEGER REFERENCES novel(id), chapter_num INTEGER NOT NULL, raw_text TEXT NOT NULL DEFAULT '', status TEXT DEFAULT 'idle');
+    """)
+    conn.commit()
+
+    conn.execute("INSERT INTO novel (id, title) VALUES (1, '逆天邪神')")
+    conn.execute("INSERT INTO novel (id, title) VALUES (2, '逆天邪神第1章 云澈')")
+    conn.execute("INSERT INTO chapter (id, novel_id, chapter_num, raw_text) VALUES (1, 1, 1, 'ch1')")
+    conn.execute("INSERT INTO chapter (id, novel_id, chapter_num, raw_text) VALUES (2, 2, 2, 'ch2')")
+    conn.commit()
+
+    from server.db import deduplicate_novels
+    merged = deduplicate_novels(conn)
+    assert merged == 1
+
+    novels = conn.execute("SELECT id, title FROM novel").fetchall()
+    assert len(novels) == 1
+    assert novels[0]["id"] == 1
+
+    chapters = conn.execute("SELECT id, novel_id FROM chapter ORDER BY id").fetchall()
+    assert [c["novel_id"] for c in chapters] == [1, 1]
+
+    conn.close()
+    db_path.unlink()

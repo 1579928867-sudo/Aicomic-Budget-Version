@@ -60,12 +60,17 @@ app.include_router(tasks_api.router)
 @app.on_event("startup")
 def on_startup():
     from server.events import EventManager
-    from server.db import TaskStore, init_schema
+    from server.db import TaskStore, init_schema, deduplicate_novels
     from server.runner import PipelineRunner, AgentRunner
 
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     init_schema(conn)
+
+    # 修复脏数据: 合并重名 novel
+    merged = deduplicate_novels(conn)
+    if merged:
+        logger.info("Cleaned up %d duplicate novel(s)", merged)
 
     event_mgr = EventManager()
     task_store = TaskStore(conn)
