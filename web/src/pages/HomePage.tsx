@@ -28,7 +28,7 @@ const CARD_COUNT = 16;
 const CARD_W = 0.55;
 const CARD_H = 0.75;
 
-export function HomePage() {
+export default function HomePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const setActivePage = useAppStore(s => s.setActivePage);
 
@@ -131,10 +131,11 @@ export function HomePage() {
 
     // ── Animation loop ──
     let animId: number;
-    const clock = new THREE.Clock();
-    const animate = () => {
+    const timer = new THREE.Timer();
+    const animate = (ts: number) => {
       animId = requestAnimationFrame(animate);
-      const dt = Math.min(clock.getDelta(), 0.1);
+      timer.update(ts);
+      const dt = Math.min(timer.getDelta(), 0.1);
       const rotSpeed = 0.25; // radians per second
 
       // Rotate the whole group: rotate each card around Y axis
