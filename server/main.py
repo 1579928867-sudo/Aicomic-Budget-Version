@@ -9,6 +9,7 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger("aicomic-server")
 
@@ -256,6 +257,12 @@ def on_shutdown():
     orch_db = getattr(app.state, "orchestrator_db", None)
     if orch_db:
         orch_db.close()
+
+
+# ── 静态文件服务 (生产环境，必须在所有路由之后) ──
+static_dir = Path(__file__).parent / "static"
+if static_dir.exists() and any(static_dir.iterdir()):
+    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
 
 
 def main():

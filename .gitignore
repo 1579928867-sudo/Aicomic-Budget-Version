@@ -9,3 +9,5 @@ build/
 data/
 test_output.txt
 .idea/
+node_modules/
+server/static/
