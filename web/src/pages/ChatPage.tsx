@@ -41,7 +41,7 @@ export function ChatPage() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', maxWidth: 780, margin: '0 auto' }}>
       {/* Header */}
-      <div style={{ marginBottom: 28 }}>
+      <div style={{ marginBottom: 24, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Sparkles size={20} />
@@ -58,8 +58,8 @@ export function ChatPage() {
         </div>
       </div>
 
-      {/* Messages */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '0 0 20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Messages — flex:1 fills available space, messages overflow scroll internally */}
+      <div style={{ flex: 1, overflow: 'auto', paddingBottom: 12, display: 'flex', flexDirection: 'column', gap: 20, minHeight: 0 }}>
         {messages.map(msg => (
           <div key={msg.id} style={{ display: 'flex', gap: 12, justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
             {msg.role === 'assistant' && (
@@ -99,8 +99,8 @@ export function ChatPage() {
         <div ref={endRef} />
       </div>
 
-      {/* Input */}
-      <div style={{ padding: '20px 0 0', borderTop: '1px solid var(--border)' }}>
+      {/* Input — sits just below messages, not pushed to very bottom */}
+      <div style={{ paddingTop: 16, flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 10 }}>
           <button style={{
             width: 42, height: 42, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
