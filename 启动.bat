@@ -120,7 +120,34 @@ echo ⚠️ 关闭此窗口将停止服务
 echo ⚠️ 按 Ctrl+C 可随时停止
 echo.
 
-start "" http://localhost:8000
-.venv\Scripts\python -m server
+:: 在独立窗口中启动服务器（方便看日志 + Ctrl+C 停止）
+start "AI漫剧 Server" .venv\Scripts\python -m server
 
+:: 等待服务就绪（最多 30 秒）
+echo 正在等待服务启动...
+for /l %%i in (1,1,30) do (
+    timeout /t 1 /nobreak >nul
+    .venv\Scripts\python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" >nul 2>&1
+    if !errorlevel!==0 (
+        echo [✓] 服务就绪，正在打开浏览器...
+        start "" http://localhost:8000
+        goto :server_ready
+    )
+)
+
+echo [⚠️] 服务启动超时！请查看 "AI漫剧 Server" 窗口中的错误信息
+echo       然后按任意键关闭此窗口，重新双击 启动.bat 再试一次
 pause
+exit /b 1
+
+:server_ready
+echo.
+echo ╔══════════════════════════════════════════╗
+echo ║  🟢 浏览器已打开，开始使用吧！            ║
+echo ║                                          ║
+echo ║  ⚠️  不要关闭 "AI漫剧 Server" 那个黑窗口    ║
+echo ║  ⚠️  用完后在 Server 窗口按 Ctrl+C 停止    ║
+echo ║  ⚠️  现在可以关闭当前窗口了                ║
+echo ╚══════════════════════════════════════════╝
+echo.
+timeout /t 5 /nobreak >nul
