@@ -56,45 +56,20 @@ app.include_router(settings_api.router)
 app.include_router(tasks_api.router)
 
 
-@app.on_event("startup")
-def on_startup():
-    # Windows GBK 编码修复 — 必须在任何 print() 之前
-    import sys as _sys
-    if _sys.platform == "win32":
-        try:
-            _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
+def init_orchestrator():
+    """初始化/重新初始化 orchestrator + runners。返回 (ok, error_msg)。"""
     from server.events import EventManager
-    from server.db import TaskStore, init_schema, deduplicate_novels, get_db
+    from server.db import TaskStore, get_db
     from server.runner import PipelineRunner, AgentRunner
 
-    conn = get_db(DB_PATH)
-    init_schema(conn)
+    # 关闭旧的 db 连接（如果有）
+    old_db = getattr(app.state, "orchestrator_db", None)
+    if old_db:
+        try: old_db.close()
+        except Exception: pass
 
-    # 确保核心表存在（空库首次启动时 init_schema 只建 web 层表）
-    from src.aicomic.db.repository import Database as _AICDB
-    _core_db = _AICDB(DB_PATH)
-    _core_db.connect()
-    _core_db.init_schema()
-    _core_db.close()
-
-    # 修复脏数据: 合并重名 novel
-    merged = deduplicate_novels(conn)
-    if merged:
-        logger.info("Cleaned up %d duplicate novel(s)", merged)
-
-    event_mgr = EventManager()
-    task_store = TaskStore(conn)
-    app.state.conn = conn
-    app.state.event_mgr = event_mgr
-    app.state.task_store = task_store
-
-    pipeline_api.event_mgr = event_mgr
-    pipeline_api.task_store = task_store
-    agents_api.event_mgr = event_mgr
-    agents_api.task_store = task_store
+    event_mgr: EventManager = app.state.event_mgr
+    task_store: TaskStore = app.state.task_store
 
     try:
         config = load_config()
@@ -154,7 +129,7 @@ def on_startup():
 
         db = AICDB(DB_PATH)
         db.connect()
-        db.init_schema()  # ensure core tables exist on fresh install
+        db.init_schema()
         orchestrator = Orchestrator(bus, db)
 
         pipeline_runner = PipelineRunner(orchestrator, event_mgr, task_store, DB_PATH)
@@ -166,11 +141,56 @@ def on_startup():
         pipeline_api.pipeline_runner = pipeline_runner
         agents_api.agent_runner = agent_runner
         logger.info("Orchestrator + Runners initialized successfully")
+        return True, None
     except Exception as e:
         logger.warning("Orchestrator/Runners NOT initialized: %s", e)
         app.state.pipeline_runner = None
         app.state.agent_runner = None
         pipeline_api.pipeline_runner = None
+        agents_api.agent_runner = None
+        return False, str(e)
+
+
+@app.on_event("startup")
+def on_startup():
+    # Windows GBK 编码修复 — 必须在任何 print() 之前
+    import sys as _sys
+    if _sys.platform == "win32":
+        try:
+            _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    from server.events import EventManager
+    from server.db import TaskStore, init_schema, deduplicate_novels, get_db
+
+    conn = get_db(DB_PATH)
+    init_schema(conn)
+
+    # 确保核心表存在（空库首次启动时 init_schema 只建 web 层表）
+    from src.aicomic.db.repository import Database as _AICDB
+    _core_db = _AICDB(DB_PATH)
+    _core_db.connect()
+    _core_db.init_schema()
+    _core_db.close()
+
+    # 修复脏数据: 合并重名 novel
+    merged = deduplicate_novels(conn)
+    if merged:
+        logger.info("Cleaned up %d duplicate novel(s)", merged)
+
+    event_mgr = EventManager()
+    task_store = TaskStore(conn)
+    app.state.conn = conn
+    app.state.event_mgr = event_mgr
+    app.state.task_store = task_store
+
+    pipeline_api.event_mgr = event_mgr
+    pipeline_api.task_store = task_store
+    agents_api.event_mgr = event_mgr
+    agents_api.task_store = task_store
+
+    init_orchestrator()
         agents_api.agent_runner = None
 
 

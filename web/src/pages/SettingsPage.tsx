@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Settings, Zap, Server, Key, ShieldAlert, CheckCircle2, Save } from 'lucide-react';
+import { Zap, Server, Key, ShieldAlert, CheckCircle2, Save } from 'lucide-react';
 import { settings } from '../api';
 
 export function SettingsPage() {
@@ -26,19 +26,15 @@ export function SettingsPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const res = await fetch('/api/settings/llm', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          backend, api_key: apiKey, model,
-          base_url: baseUrl,
-        }),
+      await settings.saveLlm({
+        backend, api_key: apiKey, model,
+        base_url: baseUrl,
       });
-      if (res.ok) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 3000);
-        // 重新加载脱敏后的配置
-        settings.llm().then(setLlmConfig).catch(() => {});
-      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+      // 重新加载脱敏后的配置 + 更新引擎状态
+      settings.llm().then(setLlmConfig).catch(() => {});
+      fetch('/api/health').then(r => r.json()).then(setHealth).catch(() => {});
     } catch {}
     setSaving(false);
   };
