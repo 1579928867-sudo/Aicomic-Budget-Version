@@ -141,40 +141,54 @@ echo ============================================
 echo   🟢 启动服务器...
 echo ============================================
 echo.
-echo 正在打开浏览器 http://localhost:8000
-echo.
-echo ⚠️ 关闭此窗口将停止服务
-echo ⚠️ 按 Ctrl+C 可随时停止
-echo.
 
-:: 在独立窗口中启动服务器（方便看日志 + Ctrl+C 停止）
-start "AI漫剧 Server" .venv\Scripts\python -m server
+:: 在同一窗口后台启动服务器（关掉热重载，避免重启打断）
+:: start /B = 后台运行，输出仍显示在当前窗口，出错了你能看到
+set AICOMIC_RELOAD=0
+start /B .venv\Scripts\python -m server
 
-:: 等待服务就绪（最多 30 秒）
-echo 正在等待服务启动...
-for /l %%i in (1,1,30) do (
+:: 等待服务就绪（最多 60 秒）
+echo 正在等待服务就绪...
+for /l %%i in (1,1,60) do (
     timeout /t 1 /nobreak >nul
     .venv\Scripts\python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" >nul 2>&1
     if !errorlevel!==0 (
-        echo [✓] 服务就绪，正在打开浏览器...
+        echo [✓] 服务就绪
+        echo.
+        echo ╔══════════════════════════════════════════╗
+        echo ║  🟢 成功！正在打开浏览器...               ║
+        echo ║                                          ║
+        echo ║  ⚠️  不要关闭这个窗口！                   ║
+        echo ║  ⚠️  用完后按 Ctrl+C 停止                 ║
+        echo ╚══════════════════════════════════════════╝
         start "" http://localhost:8000
-        goto :server_ready
+        goto :running
     )
+    :: 每 10 秒显示一次等待进度
+    set /a mod=%%i %% 10
+    if !mod!==0 echo   已等待 %%i 秒...
 )
 
-echo [⚠️] 服务启动超时！请查看 "AI漫剧 Server" 窗口中的错误信息
-echo       然后按任意键关闭此窗口，重新双击 启动.bat 再试一次
+echo.
+echo ╔══════════════════════════════════════════╗
+echo ║  ❌ 服务器启动失败                        ║
+echo ║                                          ║
+echo ║  请看上方窗口中的红色错误信息               ║
+echo ║  常见原因：                                ║
+echo ║  1. config\settings.yaml 中没填 API Key   ║
+echo ║  2. 依赖安装不完整（重新运行试试）           ║
+echo ║  3. 端口 8000 被其他程序占用               ║
+echo ║                                          ║
+echo ║  解决方法：                                ║
+echo ║  - 复制上方错误信息发给开发者               ║
+echo ║  - 或按任意键关闭后，重新双击 启动.bat       ║
+echo ╚══════════════════════════════════════════╝
 pause
 exit /b 1
 
-:server_ready
+:running
+:: 保持窗口打开，显示服务器日志
 echo.
-echo ╔══════════════════════════════════════════╗
-echo ║  🟢 浏览器已打开，开始使用吧！            ║
-echo ║                                          ║
-echo ║  ⚠️  不要关闭 "AI漫剧 Server" 那个黑窗口    ║
-echo ║  ⚠️  用完后在 Server 窗口按 Ctrl+C 停止    ║
-echo ║  ⚠️  现在可以关闭当前窗口了                ║
-echo ╚══════════════════════════════════════════╝
-echo.
-timeout /t 5 /nobreak >nul
+echo 服务器运行中...（按 Ctrl+C 停止）
+echo ----------------------------------------
+pause >nul
