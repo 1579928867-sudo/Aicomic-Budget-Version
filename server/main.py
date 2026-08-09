@@ -191,7 +191,6 @@ def on_startup():
     agents_api.task_store = task_store
 
     init_orchestrator()
-        agents_api.agent_runner = None
 
 
 @app.on_event("shutdown")
