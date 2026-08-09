@@ -1,6 +1,5 @@
 """FastAPI application entry point."""
 import logging
-import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -16,7 +15,7 @@ app = FastAPI(title="AI漫剧", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000", "http://127.0.0.1:8000"],
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
@@ -59,13 +58,27 @@ app.include_router(tasks_api.router)
 
 @app.on_event("startup")
 def on_startup():
+    # Windows GBK 编码修复 — 必须在任何 print() 之前
+    import sys as _sys
+    if _sys.platform == "win32":
+        try:
+            _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     from server.events import EventManager
-    from server.db import TaskStore, init_schema, deduplicate_novels
+    from server.db import TaskStore, init_schema, deduplicate_novels, get_db
     from server.runner import PipelineRunner, AgentRunner
 
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
+    conn = get_db(DB_PATH)
     init_schema(conn)
+
+    # 确保核心表存在（空库首次启动时 init_schema 只建 web 层表）
+    from src.aicomic.db.repository import Database as _AICDB
+    _core_db = _AICDB(DB_PATH)
+    _core_db.connect()
+    _core_db.init_schema()
+    _core_db.close()
 
     # 修复脏数据: 合并重名 novel
     merged = deduplicate_novels(conn)
@@ -141,6 +154,7 @@ def on_startup():
 
         db = AICDB(DB_PATH)
         db.connect()
+        db.init_schema()  # ensure core tables exist on fresh install
         orchestrator = Orchestrator(bus, db)
 
         pipeline_runner = PipelineRunner(orchestrator, event_mgr, task_store, DB_PATH)
@@ -173,16 +187,38 @@ data_dir = Path("data")
 if data_dir.exists():
     app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
 
-# ── 前端静态文件 (必须在最后，作为 catch-all) ──
+# ── 前端静态文件 + SPA fallback ──
+# 不挂载 "/" StaticFiles，因为会拦截 API 路由。改用自定义 catch-all。
 static_dir = Path(__file__).parent / "static"
-if static_dir.exists() and any(static_dir.iterdir()):
-    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+_static_ready = static_dir.exists() and any(static_dir.iterdir())
+
+if _static_ready:
+    from fastapi.responses import FileResponse, HTMLResponse
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend(full_path: str):
+        # 尝试匹配静态文件
+        file_path = static_dir / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        # SPA fallback — 每次请求重新读 index.html（避免 rebuild 后缓存过期）
+        index_path = static_dir / "index.html"
+        if index_path.exists():
+            return HTMLResponse(index_path.read_text(encoding="utf-8"))
+        return HTMLResponse("<h1>Frontend not built — run: cd web && npm run build</h1>")
+else:
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend_no_build(full_path: str):
+        return {"error": "frontend not built — run: cd web && npm run build"}
+
 
 
 def main():
+    import os as _os
     import uvicorn
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run("server.main:app", host="0.0.0.0", port=8000, reload=True)
+    _reload = _os.environ.get("AICOMIC_RELOAD", "").lower() not in ("0", "false", "no")
+    uvicorn.run("server.main:app", host="0.0.0.0", port=8000, reload=_reload)
 
 
 if __name__ == "__main__":
