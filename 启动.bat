@@ -12,20 +12,47 @@ echo.
 
 :: ── 1. 检测 Python ──
 set PYTHON=
-for %%p in (python python3) do (
-    where %%p >nul 2>&1
-    if !errorlevel!==0 (
-        %%p --version >nul 2>&1
-        if !errorlevel!==0 if not defined PYTHON set PYTHON=%%p
+
+:: 优先用 py launcher（python.org 官方安装必定可用）
+py --version >nul 2>&1
+if !errorlevel!==0 set PYTHON=py
+
+:: 否则扫描 PATH 上的 python / python3
+if not defined PYTHON (
+    for %%p in (python python3) do (
+        where %%p >nul 2>&1
+        if !errorlevel!==0 (
+            %%p --version >nul 2>&1
+            if !errorlevel!==0 if not defined PYTHON set PYTHON=%%p
+        )
     )
 )
+
+:: 最后扫描常见安装目录
+if not defined PYTHON (
+    for %%d in (
+        "C:\Python312" "C:\Python313" "C:\Python314"
+        "%LOCALAPPDATA%\Programs\Python\Python312"
+        "%LOCALAPPDATA%\Programs\Python\Python313"
+        "%LOCALAPPDATA%\Programs\Python\Python314"
+        "%PROGRAMFILES%\Python312" "%PROGRAMFILES%\Python313" "%PROGRAMFILES%\Python314"
+    ) do (
+        if exist %%d\python.exe if not defined PYTHON set PYTHON=%%d\python.exe
+    )
+)
+
 if "%PYTHON%"=="" (
-    echo [❌] 未找到 Python！
+    echo [❌] 未找到 Python 3.12+
     echo.
-    echo 请安装 Python 3.12 或更新版本：
-    echo https://www.python.org/downloads/
+    echo 请先安装 Python：
+    echo   1. 打开 https://www.python.org/downloads/
+    echo   2. 下载最新版安装程序
+    echo   3. 运行安装程序，务必勾选底部的 "Add python.exe to PATH"
+    echo   4. 安装完成后，重新双击 启动.bat
     echo.
-    echo ⚠️ 安装时请勾选 "Add python.exe to PATH"
+    echo 如果已安装但仍报错，请尝试：
+    echo   - 按 Win+R，输入 cmd，输入 python --version 看是否显示版本号
+    echo   - 如果不显示，说明安装时没勾 Add to PATH，请重装 Python
     echo.
     pause
     exit /b 1
