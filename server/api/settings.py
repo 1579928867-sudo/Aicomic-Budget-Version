@@ -40,17 +40,26 @@ async def cookie_auto():
         b = _login_state.get("browser")
         alive = False
         if b:
-            try: b.pages; alive = True
-            except: pass
+            try:
+                pages = b.pages
+                # 浏览器上下文暴露了 pages 但实际可能返回空列表（进程已死）
+                alive = len(pages) > 0
+            except Exception:
+                pass
         if not alive:
+            # 清理残留的 playwright 实例
+            pw = _login_state.get("playwright")
+            if pw:
+                try: pw.stop()
+                except Exception: pass
             _login_state = {"running": False, "browser": None, "playwright": None,
                             "error": None, "confirmed": False}
 
     if _login_state["running"]:
-        raise HTTPException(409, "已有登录流程在进行中，请先关闭浏览器窗口再重试")
+        raise HTTPException(409, "已有登录流程在进行中。请检查是否有未关闭的浏览器窗口，关闭后等 3 秒再试。\n如果确认没有，请点击左侧「豆包Cookie」→「取消」按钮重置状态。")
 
     _login_state = {"running": True, "browser": None, "playwright": None,
-                    "error": None, "confirmed": False}
+                    "error": None, "confirmed": False, "started_at": __import__("time").time()}
 
     def _open():
         global _login_state
@@ -71,10 +80,20 @@ async def cookie_auto():
             logger.info("Doubao login: browser opened, waiting for confirm...")
 
             import time as _time
+            _LOGIN_TIMEOUT = 300  # 5 分钟超时自动清理
             while _login_state["running"] and not _login_state.get("confirmed"):
                 _time.sleep(2)
-                try: browser.pages
-                except:
+                # 检查是否超时
+                elapsed = _time.time() - _login_state.get("started_at", _time.time())
+                if elapsed > _LOGIN_TIMEOUT:
+                    _login_state["error"] = "登录超时（5分钟），浏览器将关闭"
+                    _login_state["running"] = False
+                    logger.warning("Doubao login: timed out after %.0fs", elapsed)
+                    break
+                # 检查浏览器是否仍存活
+                try:
+                    browser.pages
+                except Exception:
                     _login_state["error"] = "Browser closed"
                     _login_state["running"] = False
                     break
@@ -118,10 +137,22 @@ def cookie_auto_confirm():
 
 @router.post("/cookie-auto-cancel")
 def cookie_auto_cancel():
-    """取消 — 后台线程检测到 running=False 会关闭浏览器."""
+    """取消 — 强制清理后台状态。即使后台线程已死也能重置。"""
+    # 尝试关闭残留的浏览器
+    b = _login_state.get("browser")
+    if b:
+        try: b.close()
+        except Exception: pass
+    pw = _login_state.get("playwright")
+    if pw:
+        try: pw.stop()
+        except Exception: pass
     _login_state["running"] = False
     _login_state["confirmed"] = False
-    return {"status": "cancelled", "message": "正在关闭浏览器…"}
+    _login_state["browser"] = None
+    _login_state["playwright"] = None
+    _login_state["error"] = "用户取消"
+    return {"status": "cancelled", "message": "登录流程已取消，状态已重置，可以重新登录"}
 
 
 # ═══════════════════════════════════════════════════════
