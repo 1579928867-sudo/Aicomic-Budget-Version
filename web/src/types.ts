@@ -33,7 +33,7 @@ export interface VideoClip {
 }
 
 export interface FinalVideo {
-  id: number; file_path: string; created_at: string;
+  id: number; file_path: string; file_size: number; created_at: string;
 }
 
 export interface Task {

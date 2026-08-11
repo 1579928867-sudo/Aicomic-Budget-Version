@@ -33,10 +33,12 @@ class VideoComposerAgent(AgentInterface):
         chapter_id = input_data["chapter_id"]
         script_id = input_data["script_id"]
 
-        # ── Idempotency check ──
-        skip = begin_agent_run(self.agent_name, chapter_id, db, {"script_id": script_id})
-        if skip:
-            return skip
+        # ── Video composer always re-runs when explicitly triggered.
+        #     Idempotency is skipped because this agent is cheap (just
+        #     ffmpeg concatenation) and users only run it when they
+        #     want to re-compose (e.g., after adding new clips).
+        #     begin_agent_run still records the "started" log entry. ──
+        begin_agent_run(self.agent_name, chapter_id, db, {"script_id": script_id})
 
         try:
             # ── Load video clips ──
@@ -71,13 +73,26 @@ class VideoComposerAgent(AgentInterface):
                 raise ValueError("No existing video clip files to compose")
 
             # ── Compose ──
+            # Look up chapter_num for human-readable filename
+            chapter_num = chapter_id
+            try:
+                row = db.conn.execute(
+                    "SELECT chapter_num FROM chapter WHERE id = ?", (chapter_id,)
+                ).fetchone()
+                if row:
+                    chapter_num = row["chapter_num"]
+            except Exception:
+                pass
+
             output_path = str(
-                self.output_dir / f"final_{chapter_id}.mp4"
+                self.output_dir / f"final_ch{chapter_num}.mp4"
             )
             final_path = self._compose(clip_paths, clip_scene_ids, output_path, chapter_id, db)
 
-            # ── Save to DB ──
-            final_video_id = db.create_final_video(chapter_id, final_path)
+            # ── Save to DB (include file_size for empty-video detection) ──
+            import os
+            fsize = os.path.getsize(final_path) if os.path.exists(final_path) else 0
+            final_video_id = db.create_final_video(chapter_id, final_path, file_size=fsize)
 
             # ── Mark done ──
             db.set_agent_status(self.agent_name, chapter_id, "done")

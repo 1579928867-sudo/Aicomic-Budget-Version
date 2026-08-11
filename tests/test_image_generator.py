@@ -16,6 +16,10 @@ class FakeBrowserClient:
         self.prompts: list[str] = []
         self.will_fail = False
 
+    def ensure_browser(self):
+        """No-op stub — browser lifecycle managed by real DoubaoBrowserClient."""
+        pass
+
     def generate_image(self, prompt: str, aspect_ratio: str = "16:9", **kwargs) -> ImageResult:
         self.call_count += 1
         self.prompts.append(prompt)
@@ -28,6 +32,20 @@ class FakeBrowserClient:
             file_paths=[path],
             url=f"https://example.com/img_{self.call_count}.png",
             metadata={"generator": "fake"},
+        )
+
+    def generate_video_from_images(
+        self, prompt: str, reference_images: list[str], duration_sec: float = 5.0,
+    ) -> ImageResult:
+        """Fake video generation for testing — returns fake mp4 paths."""
+        import uuid
+        vid_id = uuid.uuid4().hex[:8]
+        path = f"/tmp/fake_video_{vid_id}.mp4"
+        return ImageResult(
+            success=True,
+            file_path=path,
+            file_paths=[path],
+            metadata={"generator": "fake", "duration_sec": duration_sec},
         )
 
 

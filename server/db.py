@@ -3,7 +3,21 @@ from __future__ import annotations
 
 import uuid
 import sqlite3
+from pathlib import Path
 from typing import Any
+
+
+def get_db(path: str | Path = "data/aicomic.db") -> sqlite3.Connection:
+    """统一的数据库连接工厂 — 所有 API 和 runner 共用。
+
+    自动设置 WAL 模式、5 秒 busy_timeout、Row factory。
+    每个调用者负责 close()。
+    """
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
 
 
 def init_schema(conn: sqlite3.Connection):
@@ -179,7 +193,7 @@ class TaskStore:
 
     def update(self, task_id: str, status: str | None = None,
                progress: float | None = None, result: str | None = None,
-               error: str | None = None):
+               error: str | None = None, params: str | None = None):
         sets = ["updated_at = CURRENT_TIMESTAMP"]
         vals = []
         if status is not None:
@@ -190,6 +204,8 @@ class TaskStore:
             sets.append("result = ?"); vals.append(result)
         if error is not None:
             sets.append("error = ?"); vals.append(error)
+        if params is not None:
+            sets.append("params = ?"); vals.append(params)
         vals.append(task_id)
         self.conn.execute(
             f"UPDATE task SET {', '.join(sets)} WHERE id = ?", vals
@@ -207,6 +223,20 @@ class TaskStore:
             "SELECT * FROM task WHERE status IN ('pending', 'running') ORDER BY created_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def delete(self, task_id: str) -> bool:
+        """Delete a single task. Returns True if deleted, False if not found."""
+        cur = self.conn.execute("DELETE FROM task WHERE id = ?", (task_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def delete_completed(self) -> int:
+        """Delete all completed/failed/cancelled tasks. Returns count deleted."""
+        cur = self.conn.execute(
+            "DELETE FROM task WHERE status IN ('done', 'failed', 'cancelled')"
+        )
+        self.conn.commit()
+        return cur.rowcount
 
 
 def deduplicate_novels(conn: sqlite3.Connection) -> int:

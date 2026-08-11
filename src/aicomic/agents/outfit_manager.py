@@ -244,9 +244,10 @@ class OutfitManagerAgent(AgentInterface):
             (outfits_generated_delta, shots_tagged_delta)
         """
         if decision is None:
-            current_tag = char_current_tags.get(char_id)
+            current_tag = char_current_tags.get(char_id) or '默认'
+            char_current_tags[char_id] = current_tag
             db.set_shot_character_outfit(shot_id, char_id, current_tag)
-            return (0, 1 if current_tag else 0)
+            return (0, 1)
 
         if decision.change_type == "existing":
             char_current_tags[char_id] = decision.tag
@@ -282,14 +283,32 @@ class OutfitManagerAgent(AgentInterface):
 
         Scans shots at scene transitions, detects outfit changes, and creates
         outfit records for new outfits (images generated later by ImageGenerator).
+
+        IMPORTANT: Also ensures EVERY character in EVERY shot has a junction
+        record in shot_character_outfit. This is essential for LibraryPage
+        character listing and audit counts.
         """
         chapter_id = input_data["chapter_id"]
         script_id = input_data["script_id"]
+        force = input_data.get("force", False)
 
         skip = begin_agent_run(self.agent_name, chapter_id, db,
-                               {"script_id": script_id})
+                               {"script_id": script_id}, force=force)
+        # ── Safety: even if status says "done", verify junction records exist ──
         if skip:
-            return skip
+            j_count = db.conn.execute(
+                """SELECT COUNT(*) FROM shot_character_outfit sco
+                   JOIN storyboard_shot ss ON ss.id=sco.shot_id
+                   WHERE ss.script_id=?""",
+                (script_id,),
+            ).fetchone()[0]
+            if j_count == 0:
+                skip = begin_agent_run(self.agent_name, chapter_id, db,
+                                       {"script_id": script_id}, force=True)
+                if skip:
+                    return skip
+            else:
+                return skip
 
         try:
             shots = db.get_storyboard_shots(script_id)
@@ -320,7 +339,7 @@ class OutfitManagerAgent(AgentInterface):
                     char_name = self._resolve_character_name(char_id, db)
                     current_tag = char_current_tags.get(char_id)
 
-                    # Throttle: only detect on scene transitions
+                    # ── Only do LLM-based detection on scene transitions ──
                     if not is_scene_transition and current_tag is not None:
                         db.set_shot_character_outfit(shot_id, char_id, current_tag)
                         shots_tagged += 1
@@ -336,10 +355,32 @@ class OutfitManagerAgent(AgentInterface):
                     outfits_generated += og
                     shots_tagged += st
 
+            # ── BACKFILL: Ensure ALL shots have ALL their char_ids in
+            #     shot_character_outfit, even if no outfit changes detected ──
+            backfilled = 0
+            for shot in shots:
+                sd = dict(shot)
+                shot_id = sd["id"]
+                char_ids = parse_char_ids(sd.get("char_ids"))
+                for char_id in char_ids:
+                    existing = db.conn.execute(
+                        "SELECT 1 FROM shot_character_outfit WHERE shot_id=? AND character_id=?",
+                        (shot_id, char_id),
+                    ).fetchone()
+                    if not existing:
+                        tag = char_current_tags.get(char_id) or "默认"
+                        db.set_shot_character_outfit(shot_id, char_id, tag)
+                        backfilled += 1
+
+            if backfilled > 0:
+                print(f"  ℹ outfit-manager: backfilled {backfilled} junction records "
+                      f"({shots_tagged} tagged via detection)")
+
             db.set_agent_status(self.agent_name, chapter_id, "done")
             db.log(self.agent_name, chapter_id, "completed", {
                 "outfits_generated": outfits_generated,
                 "shots_tagged": shots_tagged,
+                "junction_backfilled": backfilled,
             })
 
             return AgentResult(success=True, data={

@@ -39,10 +39,129 @@ class ImageGeneratorAgent(AgentInterface):
         self.interactive = interactive
 
     def validate_input(self, input_data: dict[str, Any]) -> bool:
-        return (
+        # Batch mode: {chapter_id, script_id}
+        # Single-item mode: {chapter_id, target_type, target_id}
+        has_batch = (
             isinstance(input_data.get("chapter_id"), int)
             and isinstance(input_data.get("script_id"), int)
         )
+        has_single = (
+            isinstance(input_data.get("chapter_id"), int)
+            and isinstance(input_data.get("target_type"), str)
+            and isinstance(input_data.get("target_id"), int)
+        )
+        return has_batch or has_single
+
+    def _regenerate_single(
+        self, chapter_id: int, target_type: str, target_id: int,
+        db: Database, extra_hint: str = "",
+    ) -> AgentResult:
+        """Regenerate a single character or scene image."""
+        if target_type == "character":
+            # Get the outfit to regenerate
+            outfit_rows = db.conn.execute(
+                "SELECT id, prompt, character_id, tag, image_path FROM character_outfit "
+                "WHERE character_id = ? AND is_default = 1 ORDER BY id",
+                (target_id,),
+            ).fetchall()
+            if not outfit_rows:
+                return AgentResult(success=False, error=f"No outfit found for character #{target_id}")
+            outfit = dict(outfit_rows[0])
+            if not outfit.get("prompt"):
+                return AgentResult(success=False, error=f"No prompt for character #{target_id}")
+
+            prompt = outfit["prompt"]
+            if extra_hint:
+                prompt = prompt + f"\n\n额外要求: {extra_hint}"
+
+            char_name = db.conn.execute(
+                "SELECT name FROM character_card WHERE id = ?", (target_id,)
+            ).fetchone()
+            label = f"角色-{char_name[0]}" if char_name else f"角色#{target_id}"
+
+        elif target_type == "scene":
+            scene_row = db.conn.execute(
+                "SELECT id, name, multi_view_prompt, description FROM scene_card WHERE id = ?",
+                (target_id,),
+            ).fetchone()
+            if not scene_row:
+                return AgentResult(
+                    success=False,
+                    error=f"场景 #{target_id} 不存在，请先运行「剧本与设计」阶段",
+                )
+            scene_name = scene_row["name"]
+            if not scene_row["multi_view_prompt"]:
+                # ── Try to auto-generate a prompt from the scene description ──
+                desc = scene_row["description"] or ""
+                if desc:
+                    # Build a basic multi-view prompt from existing scene data
+                    prompt = (
+                        f"不能出现其他人，无人纯场景，no humans,empty,landscape only，"
+                        f"古代仙侠风格，写实电影感风格，"
+                        f"9:16竖屏构图，三等分场景多景别contact sheet，"
+                        f"场景：{scene_name}。{desc}"
+                    )
+                else:
+                    # Nothing to work with — need scene designer first
+                    return AgentResult(
+                        success=False,
+                        error=(
+                            f"场景「{scene_name}」缺少设计提示词，"
+                            f"请先重新运行「剧本与设计」阶段生成场景设计"
+                        ),
+                    )
+            else:
+                prompt = scene_row["multi_view_prompt"]
+            if extra_hint:
+                prompt = prompt + f"\n\n额外要求: {extra_hint}"
+            label = f"场景-{scene_name}"
+        else:
+            return AgentResult(success=False, error=f"Unknown target_type: {target_type}")
+
+        print(f"  Image Generator [单图]: 重新生成 {label}...")
+        try:
+            # 确保浏览器存活 (上次运行可能已关闭)
+            self.browser.ensure_browser()
+            result = self.browser.generate_image(
+                prompt=normalize_prompt_terms(prompt), aspect_ratio="16:9",
+            )
+            if result.success and result.file_paths:
+                chosen = result.file_paths[0]
+                if len(result.file_paths) > 1:
+                    chosen = user_select_candidate(
+                        result.file_paths, self.interactive,
+                        f"📷 {label}",
+                    )
+                if chosen:
+                    if target_type == "character":
+                        # ── 面部网格遮罩：绕过真实人脸检测 ──
+                        try:
+                            from .face_overlay import apply_face_grid
+                            grid_path = apply_face_grid(chosen)
+                            Path(chosen).unlink(missing_ok=True)
+                            chosen = grid_path
+                        except Exception:
+                            pass  # 网格失败不阻断
+                        db.update_outfit_image(outfit["id"], chosen)
+                    elif target_type == "scene":
+                        db.conn.execute(
+                            "UPDATE scene_card SET multi_view_image = ? WHERE id = ?",
+                            (chosen, target_id),
+                        )
+                        db.conn.commit()
+                    # Cleanup unchosen
+                    for p in result.file_paths:
+                        if p != chosen:
+                            try:
+                                Path(p).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                    print(f"    [{label}] ✓ 已保存 {Path(chosen).name}")
+                    return AgentResult(success=True, data={"regenerated": label, "image_path": chosen})
+            print(f"    [{label}] ✗ 生成失败: {result.error}")
+            return AgentResult(success=False, error=result.error or "generation failed")
+        except Exception as e:
+            return AgentResult(success=False, error=str(e))
 
     def _process_entity(
         self,
@@ -121,13 +240,25 @@ class ImageGeneratorAgent(AgentInterface):
 
     def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
         chapter_id = input_data["chapter_id"]
-        script_id = input_data["script_id"]
+        script_id = input_data.get("script_id")
+        target_type = input_data.get("target_type")
+        target_id = input_data.get("target_id")
 
-        # ── Idempotency check ──
+        # ── Single-item mode: regenerate one character or scene ──
+        if target_type and target_id:
+            return self._regenerate_single(chapter_id, target_type, target_id, db, input_data.get("extra", ""))
+
+        # ── Idempotency check (batch mode) ──
         skip = begin_agent_run(self.agent_name, chapter_id, db,
                                {"script_id": script_id})
         if skip:
             return skip
+
+        # ── Ensure browser is alive on current thread ──
+        # (PipelineRunner/AgentRunner use ThreadPoolExecutor; the browser may
+        # have been created on a different thread. ensure_browser() detects
+        # cross-thread usage and recreates the browser if needed.)
+        self.browser.ensure_browser()
 
         try:
             # ── Load outfits with pending images (prompt exists, image_path empty) ──
@@ -175,6 +306,17 @@ class ImageGeneratorAgent(AgentInterface):
                                 f"📷 角色设定图 #{outfit['id']}",
                             )
                         if chosen:
+                            # ── 面部网格遮罩：自动叠加半透明网格，绕过真实人脸检测 ──
+                            try:
+                                from .face_overlay import apply_face_grid
+                                grid_path = apply_face_grid(chosen)
+                                # 替换 chosen 为网格版本
+                                Path(chosen).unlink(missing_ok=True)
+                                chosen = grid_path
+                                print(f"    [面部网格] ✓ 已叠加半透明网格遮罩")
+                            except Exception:
+                                pass  # 网格失败不影响生成，用原图
+
                             db.update_outfit_image(outfit["id"], chosen)
                             outfits_processed += 1
                             # Delete unchosen

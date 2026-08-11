@@ -1,25 +1,19 @@
 """任务中心端点 — 查看、取消、重试任务."""
 import json
-import sqlite3
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
+from server.db import get_db
 
 DB_PATH = Path("data/aicomic.db")
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
-def _get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 @router.get("")
 def list_tasks(limit: int = 50):
     """所有任务列表."""
     from server.db import TaskStore
-    conn = _get_conn()
+    conn = get_db()
     try:
         store = TaskStore(conn)
         tasks = store.list_all(limit=limit)
@@ -32,7 +26,7 @@ def list_tasks(limit: int = 50):
 def get_task(task_id: str):
     """单个任务详情."""
     from server.db import TaskStore
-    conn = _get_conn()
+    conn = get_db()
     try:
         store = TaskStore(conn)
         task = store.get(task_id)
@@ -47,7 +41,7 @@ def get_task(task_id: str):
 def cancel_task(task_id: str):
     """取消运行中的任务."""
     from server.db import TaskStore
-    conn = _get_conn()
+    conn = get_db()
     try:
         store = TaskStore(conn)
         task = store.get(task_id)
@@ -76,7 +70,7 @@ def cancel_task(task_id: str):
 def retry_task(task_id: str):
     """重试失败的任务."""
     from server.db import TaskStore
-    conn = _get_conn()
+    conn = get_db()
     try:
         store = TaskStore(conn)
         task = store.get(task_id)
@@ -100,5 +94,33 @@ def retry_task(task_id: str):
             "new_task_id": new_tid,
             "events_url": f"/api/events/{new_tid}",
         }
+    finally:
+        conn.close()
+
+
+@router.delete("/{task_id}")
+def delete_task(task_id: str):
+    """删除单个任务."""
+    from server.db import TaskStore
+    conn = get_db()
+    try:
+        store = TaskStore(conn)
+        ok = store.delete(task_id)
+        if not ok:
+            raise HTTPException(404, f"Task '{task_id}' not found")
+        return {"status": "deleted", "task_id": task_id}
+    finally:
+        conn.close()
+
+
+@router.delete("")
+def clear_completed_tasks():
+    """清空所有已完成/失败/已取消的任务."""
+    from server.db import TaskStore
+    conn = get_db()
+    try:
+        store = TaskStore(conn)
+        count = store.delete_completed()
+        return {"status": "cleared", "deleted_count": count}
     finally:
         conn.close()

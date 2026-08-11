@@ -39,19 +39,144 @@ class ShotVideoGeneratorAgent(AgentInterface):
 
     agent_name = "shot-video-generator"
 
+    # 免费用户豆包每日3次视频额度
+    DEFAULT_MAX_CLIPS_PER_RUN = 3
+
+    # ── Preflight: video-specific 3-point check (browser+cookie already
+    #     verified by image generation — skip to video-only selectors) ──
+
+    def _preflight_browser(self, chapter_id: int, db: Database) -> str | None:
+        """Video-phase diagnostic — 12s max. Only checks what image gen doesn't.
+
+        Checkpoints (retried 3x with 1s delays for lazy React rendering):
+        A. Video tab     — 「视频」tab exists + clickable?
+        B. File input    — hidden <input type=file> accepting images?
+        C. Send button   — #flow-end-msg-send or equivalent?
+
+        Returns None if all pass, or error string with [Check X/3 失败] + fix.
+        """
+        import time as _time
+
+        page = None
+        try:
+            page = self.browser._context.new_page()
+            page.set_default_timeout(15000)
+            page.goto("https://www.doubao.com/chat/create-image",
+                      wait_until="domcontentloaded", timeout=15000)
+            _time.sleep(2.0)
+
+            if "login" in page.url.lower() or "passport" in page.url.lower():
+                return ("[Check A/3 失败] 豆包 Cookie 已过期 → "
+                        "前往「豆包Cookie」页面重新登录")
+
+            # ── Check A: Video tab (retry 3x — React lazy render) ──
+            tab_found = None
+            for attempt in range(3):
+                tab_found = page.evaluate("""() => {
+                    const all = document.querySelectorAll(
+                        '[data-slot="tabs-trigger"], [role="tab"], '
+                        + 'button, [role="button"], [class*="tab"]');
+                    for (const t of all) {
+                        const txt = (t.textContent || '').trim();
+                        if (txt === '视频' || txt.startsWith('视频')) {
+                            const r = t.getBoundingClientRect();
+                            return r.width > 0 && r.height > 0 ? 'visible' : 'hidden';
+                        }
+                    }
+                    return 'missing';
+                }""")
+                if tab_found == 'visible':
+                    break
+                _time.sleep(1.0)
+            if tab_found != 'visible':
+                detail = f"状态={tab_found}（重试3次）"
+                return (f"[Check A/3 失败] 豆包页面未找到可用的「视频」tab（{detail}）→ "
+                        "豆包可能改版。请检查豆包页面是否正常显示视频 tab，"
+                        "如有异常请截图发给开发者更新选择器。")
+
+            # ── Check B: File input (the one used by set_input_files) ──
+            input_found = page.evaluate("""() => {
+                const inputs = document.querySelectorAll('input[type="file"]');
+                let target = null;
+                for (const i of inputs) {
+                    const accept = (i.getAttribute('accept') || '').toLowerCase();
+                    // The video tab's image upload input
+                    if (accept.includes('.jpg') || accept.includes('image/')) {
+                        target = {accept: accept.substring(0, 40),
+                                  visible: i.offsetParent !== null};
+                        break;
+                    }
+                }
+                if (!target) {
+                    // Any file input is better than nothing
+                    for (const i of inputs) {
+                        target = {accept: (i.getAttribute('accept')||'any').substring(0,40),
+                                  visible: i.offsetParent !== null};
+                        break;
+                    }
+                }
+                return target || {accept: null, visible: false, total: inputs.length};
+            }""")
+            if not input_found.get('accept'):
+                total = input_found.get('total', 0)
+                return (f"[Check B/3 失败] 页面无图片上传 input（共 {total} 个 file input 但都不接受图片）→ "
+                        "豆包可能改版。请截图发给开发者。")
+
+            # ── Check C: Send button (match _click_send_button's 3 strategies) ──
+            send_found = page.evaluate("""() => {
+                // Strategy 0: known ID
+                let btn = document.querySelector('#flow-end-msg-send');
+                if (btn && btn.offsetParent !== null) return 'flow-end-msg-send';
+                // Strategy 1: CSS selectors
+                const css = ['button[class*="send-msg"]', 'button[class*="send-btn"]',
+                             'button[class*="bg-g-send-msg"]',
+                             'button[aria-label*="发送" i]', 'div[role="button"][aria-label*="发送" i]'];
+                for (const sel of css) {
+                    btn = document.querySelector(sel);
+                    if (btn && btn.offsetParent !== null) return sel.replace(/[\\[\\]"'*]/g,'');
+                }
+                // Strategy 2: any button near bottom (y>200, small width)
+                for (const b of document.querySelectorAll('button, div[role="button"]')) {
+                    const r = b.getBoundingClientRect();
+                    if (r.width > 10 && r.width < 100 && r.y > 200 && b.offsetParent !== null)
+                        return (b.id || b.className || 'button').substring(0, 30);
+                }
+                return null;
+            }""")
+            if not send_found:
+                return ("[Check C/3 失败] 未找到发送按钮 → "
+                        "豆包可能改版。请截图发给开发者。")
+
+            # All passed
+            return None
+
+        except Exception as e:
+            err = str(e)
+            if "timeout" in err.lower():
+                return "[Preflight] 豆包页面加载超时 → 网络慢或豆包服务器繁忙"
+            return f"[Preflight] 异常: {err[:200]}"
+        finally:
+            if page:
+                try: page.close()
+                except Exception: pass
+
     def __init__(
         self, browser_client: Any, duration_sec: float = 5.0,
         interactive: bool = False,
+        max_clips_per_run: int = 3,
     ) -> None:
         """Args:
             browser_client: DoubaoBrowserClient instance (shared across agents).
             duration_sec: Default video duration for each shot (test phase: 5s).
             interactive: If True, open candidates with system player and prompt
                          user to pick one. Default False — auto-selects first.
+            max_clips_per_run: Stop after this many new clips per run.
+                               0 = no limit. Default 3 (free doubao quota).
         """
         self.browser = browser_client
         self.duration_sec = duration_sec
         self.interactive = interactive
+        self.max_clips_per_run = max_clips_per_run
 
     def validate_input(self, input_data: dict[str, Any]) -> bool:
         return (
@@ -151,6 +276,20 @@ class ShotVideoGeneratorAgent(AgentInterface):
                         "label": f"场景多景别：{row['name']}",
                     })
 
+        # ── Step 4: Apply face grid overlay to role images to bypass
+        #     Doubao's "real face detection" filter. Scene images are
+        #     left untouched — only character faces need the grid. ──
+        from .face_overlay import apply_face_grid
+        for ri in images:
+            if ri.get("kind") == "role":
+                try:
+                    grid_path = apply_face_grid(ri["path"])
+                    ri["path"] = grid_path
+                    ri["label"] += "（网格遮罩）"
+                except Exception as e:
+                    print(f"    ⚠ 面部网格叠加失败 ({Path(ri['path']).name}): {e}")
+                    # Continue with original image — don't fail pipeline
+
         return images
 
     # ── Video prompt builder ──
@@ -204,22 +343,22 @@ class ShotVideoGeneratorAgent(AgentInterface):
         return cleaned.strip()
 
     def _build_video_prompt(
-        self, shot: dict, ref_images: list[dict]
+        self, shot: dict, ref_images: list[dict], db: Database = None
     ) -> str:
-        """Build industry-standard time-segmented video prompt.
+        """Build Doubao-approved video prompt mimicking the user-proven format.
 
-        v0.13+ structure (aligned with 豆包漫剧 industry reference):
-          角色—[char names]; 场景—[scene]
-          [0-3s]镜头:...。音效:...。衔接前置指令:...
-          [3-7s]镜头:...。音效:...。衔接前置指令:...
-          [7-10s]镜头:...。音效:...。衔接前置指令:...
-          场景:[scene summary]。（视频不要添加字幕）
-          （使用中文对话，禁止添加字幕）
-          （这是我用AI生成的图片，我有版权）
+        Proven format that passes moderation:
+          虚幻引擎 5，4K-60fps，16:9 宽银幕，3D偏写实国漫质感，<角色描述>，<场景描述>
+          X‑Xs：<运镜>，<动作>，<对话>，<音效>
+          ...
+          禁止背景音乐，只保留环境音效与人声对白，全部画面由AI原创
 
-        v0.13.1 cleanup:
-        - Dialogue: strip （内心/音色） annotations (flags moderation)
-        - Transition: strip "衔接镜头N的X-X秒" cross-shot refs (noise for video model)
+        Key rules:
+        - No parentheses anywhere — they flag moderation
+        - No square brackets on time ranges
+        - Dialogue as "人物独白：..." (monologue) or inline quotes
+        - Sound as "音效为..." / "环境音效为..." (natural sentence)
+        - All constraints in the closing line only
         """
         import json
 
@@ -230,10 +369,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
         except (json.JSONDecodeError, TypeError):
             segments = []
 
-        # ── Build parts ──
-        parts = []
-
-        # ── 1. 角色 + 场景 header ──
+        # ── Extract role names & scene name ──
         role_names: list[str] = []
         scene_name = ""
         for ri in ref_images:
@@ -244,80 +380,138 @@ class ShotVideoGeneratorAgent(AgentInterface):
             elif ri.get("kind") == "scene":
                 scene_name = ri["label"].replace("场景多景别参考图", "").replace("场景多景别：", "").replace("场景：", "").strip()
 
+        # ── Camera label mapping to natural style ──
+        _CAMERA_MAP = {
+            "特写": "特写", "大特写": "大特写", "近景": "近景镜头",
+            "中景": "中景镜头", "全景": "全景镜头", "远景": "远景镜头",
+            "Push": "缓慢推镜", "Pull": "缓慢拉远", "Pan": "水平横移",
+            "FT": "跟随镜头", "HA": "高角度俯拍", "LA": "低角度仰拍",
+            "OTS": "过肩视角", "CU": "特写", "ECU": "大特写",
+            "MS": "中景镜头", "LS": "全景镜头",
+        }
+
+        parts: list[str] = []
+
+        # ── 1. Opening header: tech specs + character + scene ──
+        header = "虚幻引擎 5，4K-60fps，16:9 宽银幕，3D偏写实国漫质感"
+        # Build character description from roles
         if role_names:
-            parts.append(f"角色 — {'、'.join(role_names)}；场景 — {scene_name or '当前场景'}")
+            char_desc = "、".join(role_names)
+            header += f"，{char_desc}"
+        # Scene
+        if scene_name:
+            header += f"，{scene_name}"
+        # Universal character constraints in header
+        header += "，全程人物面部清晰干净不存在网格线条，全程不带任何字幕"
+        parts.append(header)
 
-        # ── 横屏 ──
-        parts.append("横屏 16:9")
-
-        # ── 2. Per-segment instructions (no [], no 镜头: prefix) ──
+        # ── 2. Per-segment instructions ──
         if segments and len(segments) == 3:
             for seg in segments:
                 time_range = seg.get("time_range", "?")
-                # Normalize "0-3秒" → "0-3 秒" (add space), strip any existing []
-                time_range = time_range.replace("[", "").replace("]", "").replace("秒", " 秒").rstrip()
-                camera = seg.get("camera", "中景")
+                time_range = time_range.replace("[", "").replace("]", "").replace("秒", "s").rstrip()
+                camera_raw = seg.get("camera", "中景")
+                camera = _CAMERA_MAP.get(camera_raw, camera_raw + "镜头")
                 action = seg.get("action", "")
                 dialogue = seg.get("dialogue")
                 sound = seg.get("sound", "")
-                transition = seg.get("transition")
 
-                # Transition — strip cross-shot refs, weave as natural visual
-                # continuation. Each shot is generated independently, so transition
-                # describes the character's next movement, not shot-to-shot metadata.
-                if transition:
-                    import re as _re
-                    trans_text = self._clean_transition(transition)
-                    if trans_text:
-                        trans_text = trans_text.rstrip("。")
-                        trans_text = _re.sub(r'^衔接前置指令[：:]\s*', '', trans_text)
-                        action += f"，随后{trans_text}"
+                # Build segment line
+                line = f"{time_range}：{camera}，{action}"
 
-                # Build segment line: time + camera + action
-                line = f"{time_range}{camera}，{action}"
-
-                # Inline dialogue — strip voice/emotion annotations
+                # Dialogue — use "，人物独白：..." style
                 if dialogue:
-                    clean_dialogue = self._clean_dialogue(dialogue)
-                    if clean_dialogue:
-                        line += f"。{clean_dialogue}"
+                    clean = self._clean_dialogue(dialogue)
+                    if clean:
+                        line += f"，人物独白：{clean}"
 
-                # Sound
+                # Sound — natural language format
                 if sound:
-                    line += f"。音效：{sound}"
+                    line += f"，音效为{sound}"
 
-                parts.append(line + "。")
+                parts.append(line)
         else:
             # Fallback: flat 10s segment
             image_prompt = normalize_prompt_terms(shot.get("image_prompt", ""))
             narration = normalize_prompt_terms(shot.get("narration", ""))
-            camera = shot.get("camera_movement", "")
-            camera_motion_map = {
-                "Push": "镜头缓慢推进", "Pull": "镜头缓慢拉远",
-                "Pan": "镜头水平横移", "FT": "镜头跟随人物移动",
-                "HA": "高角度俯拍", "LA": "低角度仰拍",
-                "OTS": "过肩视角", "CU": "特写", "ECU": "大特写",
-                "MS": "中景", "LS": "全景",
-            }
-            motion = camera_motion_map.get(camera, "中景")
-            dialogue = normalize_prompt_terms(shot.get("dialogue", ""))
-            line = f"0-10 秒{motion}，{image_prompt}。{narration}"
-            if dialogue:
-                line += f"，{dialogue}"
-            parts.append(line + "。")
+            camera_raw = shot.get("camera_movement", "MS")
+            camera = _CAMERA_MAP.get(camera_raw, "中景镜头")
+            parts.append(f"0-10s：{camera}，{image_prompt}。{narration}")
 
-        # ── 3. Scene summary (matching industry format) ──
-        scene_summary = ""
-        if scene_name:
-            scene_summary = f"场景：{scene_name}。"
-        # Add video subtitle instruction
-        parts.append(f"{scene_summary}（视频不要添加字幕）")
-
-        # ── 4. Closing instructions ──
-        parts.append("（使用中文对话，禁止添加字幕）")
-        parts.append("（这是我用AI生成的图片，我有版权）")
-
+        # ── 3. Single closing line — no parentheses ──
+        parts.append("禁止背景音乐，只保留环境音效与人声对白，全部画面由AI原创")
         return "\n".join(parts)
+
+    # ── crowd_density → crowd visual description ──
+    _CROWD_DESCRIPTIONS: dict[str, str] = {
+        "sparse": "场景中数名路人经过，近处1-2人五官清晰可见（通用亚洲面容，非特定人物），"
+                  "脚步自然身姿放松；中距离行人面目逐渐模糊；远处偶尔一人形单影只",
+        "moderate": "三五成群的人流自然走动，近处（镜头2-3米内）数人面容清晰可辨，"
+                    "均为各不相同的通用面容，有人交谈有人驻足；中景人影密集但面目不清；"
+                    "远景人头攒动均为剪影轮廓。整体生机勃勃但不拥挤",
+        "busy": "热闹喧哗的人群场景——近处（1-3米）5-8人面容清晰，有摊贩有顾客有路人，"
+                "各不相同面庞，自然地交谈、手势、走动；中景数十人影密集，个别可辨面容线条；"
+                "远景人潮如织均为剪影。整体兴奋忙碌的氛围",
+        "packed": "水泄不通的极端拥挤——近处（1-2米）数人挤在画面边缘，面容清晰各不相同，"
+                  "有人侧身挤过有人抬头张望；中景人海密集叠压，最前排面容半可见各有不同；"
+                  "远景无边无际的人潮剪影。整个画面被人体密度填满",
+    }
+
+    def _build_crowd_context(self, shot: dict, db: Database = None) -> str | None:
+        """Build background crowd description from script-level crowd_density metadata.
+
+        Priority:
+        1. Beat-level crowd_density from segments_json (per-beat granularity)
+        2. Scene-level crowd_density from scene_card table
+        3. Keyword-based heuristic from scene name (legacy fallback)
+
+        Returns None for "empty" density or if no data available.
+        """
+        import json
+
+        # ── Priority 1: beat-level from segments ──
+        segments_json = shot.get("segments_json", "[]")
+        try:
+            segments = json.loads(segments_json) if isinstance(segments_json, str) else segments_json
+        except (json.JSONDecodeError, TypeError):
+            segments = []
+        for seg in segments:
+            density = (seg.get("crowd_density") or "").strip()
+            if density and density != "empty":
+                desc = self._CROWD_DESCRIPTIONS.get(density)
+                if desc:
+                    return self._format_crowd_prompt(desc)
+
+        # ── Priority 2: scene_card table ──
+        if db:
+            scene_id = shot.get("scene_id")
+            if scene_id:
+                row = db.conn.execute(
+                    "SELECT crowd_density FROM scene_card WHERE id=? AND crowd_density!=''",
+                    (scene_id,),
+                ).fetchone()
+                if row:
+                    density = row["crowd_density"]
+                    if density != "empty":
+                        desc = self._CROWD_DESCRIPTIONS.get(density)
+                        if desc:
+                            return self._format_crowd_prompt(desc)
+
+        # ── Priority 3: scene name keyword fallback ──
+        # Extract scene name from shot labels (available at call site)
+        return None
+
+    @staticmethod
+    def _format_crowd_prompt(desc: str) -> str:
+        return (
+            f"（场景人群环境：{desc}。"
+            f"【人群面部规则】近处（3米内）路人需要有清晰但各不相同的通用面容，"
+            f"不能出现明星/名人脸，每人五官随机自然；中距离面容简化；远景剪影。"
+            f"【群众反应】如剧情中有围观者议论/惊呼/窃窃私语，近处路人应有相应的"
+            f"口型微动和表情变化，但始终作为背景角色不可喧宾夺主。"
+            f"【绝对禁止】禁止任何两个路人拥有完全相同的面容或服装；"
+            f"禁止复制粘贴同一人物到画面其他位置）"
+        )
 
     @staticmethod
     def _is_redundant(narration: str, image_prompt: str) -> bool:
@@ -377,11 +571,35 @@ class ShotVideoGeneratorAgent(AgentInterface):
     def execute(self, input_data: dict[str, Any], db: Database) -> AgentResult:
         chapter_id = input_data["chapter_id"]
         script_id = input_data["script_id"]
+        target_shot_num = input_data.get("shot_num")  # None = all, int = single shot
+        max_clips = input_data.get("max_clips_per_run", self.max_clips_per_run)
+
+        # ── Read video model preference from settings ──
+        try:
+            row = db.conn.execute(
+                "SELECT value FROM settings WHERE key = 'video_model'"
+            ).fetchone()
+            video_model = row["value"] if row else "mini"
+        except Exception:
+            video_model = "mini"
 
         # ── Idempotency check ──
-        skip = begin_agent_run(self.agent_name, chapter_id, db, {"script_id": script_id})
+        # 单镜头重试时 force=True，绕过已完成的幂等检查
+        force_run = target_shot_num is not None
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"script_id": script_id}, force=force_run)
         if skip:
             return skip
+
+        # ── Ensure browser is alive on current thread ──
+        self.browser.ensure_browser()
+
+        # ── Quick preflight: detect browser/cookie/network issues NOW ──
+        preflight_err = self._preflight_browser(chapter_id, db)
+        if preflight_err:
+            db.set_agent_status(self.agent_name, chapter_id, "failed")
+            db.log(self.agent_name, chapter_id, "preflight_failed",
+                   {"error": preflight_err}, level="ERROR")
+            return AgentResult(success=False, error=preflight_err)
 
         try:
             # ── Load shots with image_prompts ──
@@ -390,6 +608,8 @@ class ShotVideoGeneratorAgent(AgentInterface):
                 raise ValueError(f"No storyboard shots for script_id={script_id}")
 
             # Filter: need image_prompt, and no existing video_clip
+            # (单镜头重试时，无视已有 clip，强制重新生成)
+            ignore_existing = target_shot_num is not None
             shots_to_generate = []
             already_done = []
             for s in shots:
@@ -398,9 +618,34 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     continue  # No image prompt → skip
                 existing = db.get_video_clips_for_shot(sd["id"])
                 if existing:
-                    already_done.append(sd["shot_num"])
+                    if ignore_existing and sd["shot_num"] == target_shot_num:
+                        # Delete old clip so it can be regenerated
+                        for clip in existing:
+                            try:
+                                db.conn.execute("DELETE FROM video_clip WHERE id=?", (clip["id"],))
+                                # Also delete the file on disk
+                                fp = clip.get("file_path", "")
+                                if fp:
+                                    try:
+                                        Path(fp).unlink(missing_ok=True)
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                        db.conn.commit()
+                        shots_to_generate.append(sd)
+                        print(f"    🔄 镜头 {sd['shot_num']} 已有视频，已删除旧文件，重新生成")
+                    else:
+                        already_done.append(sd["shot_num"])
                 else:
                     shots_to_generate.append(sd)
+
+            # ── 单镜头筛选：如果指定了 shot_num，只处理该镜头 ──
+            if target_shot_num is not None:
+                shots_to_generate = [s for s in shots_to_generate if s["shot_num"] == target_shot_num]
+                if not shots_to_generate:
+                    # Must exist already (filtered to ignore_existing, so not in already_done)
+                    raise ValueError(f"镜头 {target_shot_num} 不存在或尚无 image_prompt（需先运行图片生成阶段）")
 
             if not shots_to_generate:
                 db.log(
@@ -425,8 +670,47 @@ class ShotVideoGeneratorAgent(AgentInterface):
 
             # ── Generate per shot ──
             clips_created = 0
+            attempts_this_batch = 0
+            consecutive_browser_errors = 0
+            succeeded_shot_nums: list[int] = []
             for si, shot in enumerate(shots_to_generate):
                 shot_num = shot["shot_num"]
+
+                # ── 额度检查点（尝试次数制，含失败）：每 N 次尝试就暂停 ──
+                if max_clips > 0 and attempts_this_batch >= max_clips:
+                    remaining = total_with_prompts - clips_created - len(already_done)
+                    db.set_agent_status(self.agent_name, chapter_id, "budget_paused")
+                    db.log(
+                        self.agent_name, chapter_id, "budget_paused",
+                        {
+                            "clips_created": clips_created,
+                            "total_shots": total_with_prompts,
+                            "remaining": remaining,
+                            "budget_per_run": max_clips,
+                            "succeeded_shot_nums": succeeded_shot_nums,
+                            "attempts_this_batch": attempts_this_batch,
+                        },
+                    )
+                    succeeded_list = "、".join(f"镜头{n}" for n in succeeded_shot_nums) if succeeded_shot_nums else "无"
+                    print(f"\n  ⏸ 额度检查点: 本批次尝试 {attempts_this_batch} 次，成功 {clips_created} 个（每批上限 {max_clips}）")
+                    print(f"  ✅ 成功: {succeeded_list}")
+                    if remaining > 0:
+                        print(f"  📋 剩余 {remaining} 个镜头待生成，请继续下一批次")
+                    return AgentResult(
+                        success=True,
+                        data={
+                            "clips_created": clips_created,
+                            "total_shots": total_with_prompts,
+                            "already_done": len(already_done),
+                            "failed_count": attempts_this_batch - clips_created,
+                            "status": "budget_paused",
+                            "remaining_shots": remaining,
+                            "budget_per_run": max_clips,
+                            "succeeded_shot_nums": succeeded_shot_nums,
+                            "message": f"本批次尝试 {attempts_this_batch} 次，成功生成 {clips_created} 个分镜视频（每批限额 {max_clips}）。{remaining} 个剩余。",
+                        },
+                    )
+
                 label = f"镜头 {shot_num} ({si+1}/{len(shots_to_generate)})"
                 print(f"\n  [{label}]")
 
@@ -458,7 +742,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
 
                 # Build video prompt with structured ref info
                 video_prompt = self._build_video_prompt(
-                    shot, ref_images
+                    shot, ref_images, db
                 )
                 print(f"    📝 视频提示词 ({len(video_prompt)} 字)")
 
@@ -470,6 +754,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     prompt=video_prompt,
                     reference_images=ref_paths,
                     duration_sec=float(shot.get("duration_sec", self.duration_sec)),
+                    video_model=video_model,
                 )
 
                 if not result.success or not result.file_paths:
@@ -492,6 +777,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                                 duration_sec=float(
                                     shot.get("duration_sec", self.duration_sec)
                                 ),
+                                video_model=video_model,
                             )
                             if result.success and result.file_paths:
                                 print(f"    ✓ 重试成功（强化视频模式）")
@@ -506,6 +792,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                                     level="WARNING",
                                 )
                                 print(f"    ✗ 重试仍失败: {result.error}")
+                                attempts_this_batch += 1
                                 continue
                         else:
                             db.log(
@@ -515,6 +802,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                                 level="WARNING",
                             )
                             print(f"    ✗ 无法调整 prompt，跳过")
+                            attempts_this_batch += 1
                             continue
 
                     # ── Paste failure: hard stop — don't waste time ──
@@ -547,9 +835,41 @@ class ShotVideoGeneratorAgent(AgentInterface):
                             level="WARNING",
                         )
                         print(f"    ✗ 跳过（审核拦截，未修改 prompt）")
+                        attempts_this_batch += 1
+                        consecutive_browser_errors = 0
                         continue
 
                     else:
+                        error_str = str(result.error or "")
+                        # ── 浏览器死亡检测：立即中止，不再浪费额度 ──
+                        if any(kw in error_str for kw in ("closed", "detached", "aborted", "Target page")):
+                            consecutive_browser_errors += 1
+                            attempts_this_batch += 1
+                            if consecutive_browser_errors >= 2:
+                                msg = (
+                                    f"⛔ 浏览器已断开（连续 {consecutive_browser_errors} 次错误）。"
+                                    f"已生成 {clips_created} 个，剩余镜头中止。请检查豆包页面后重试。"
+                                )
+                                print(f"\n  {msg}")
+                                db.log(
+                                    self.agent_name, chapter_id, "pipeline_aborted",
+                                    {"shot_num": shot_num, "reason": "browser_dead",
+                                     "consecutive_errors": consecutive_browser_errors,
+                                     "clips_created": clips_created},
+                                    level="ERROR",
+                                )
+                                return AgentResult(
+                                    success=False,
+                                    error=f"浏览器已断开：{error_str[:120]}",
+                                    data={
+                                        "clips_created": clips_created,
+                                        "failed_count": attempts_this_batch - clips_created,
+                                        "status": "browser_dead",
+                                        "succeeded_shot_nums": succeeded_shot_nums,
+                                    },
+                                )
+                        else:
+                            consecutive_browser_errors = 0
                         db.log(
                             self.agent_name, chapter_id, "shot_video_failed",
                             {"shot_num": shot_num, "shot_id": shot["id"],
@@ -557,6 +877,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                             level="WARNING",
                         )
                         print(f"    ✗ 生成失败: {result.error}")
+                        attempts_this_batch += 1
                         continue
 
                 # User selection
@@ -594,6 +915,9 @@ class ShotVideoGeneratorAgent(AgentInterface):
                         duration_sec=float(shot.get("duration_sec", self.duration_sec)),
                     )
                     clips_created += 1
+                    attempts_this_batch += 1
+                    consecutive_browser_errors = 0
+                    succeeded_shot_nums.append(shot_num)
                     print(f"    💾 已保存到数据库 (shot_id={shot['id']})")
 
                 except Exception as e:
@@ -605,14 +929,18 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     print(f"    ✗ 数据库写入失败: {e}")
 
             # ── Mark status (partial if some failed, so next run can resume) ──
-            failed_count = total_with_prompts - clips_created - len(already_done)
-            if clips_created == 0:
-                final_status = "failed"
-            elif failed_count > 0:
-                final_status = "partial"  # Some shots still need generation
+            # 单镜头重试：不覆盖整章状态，设为 partial 允许后续再跑
+            if target_shot_num is not None:
+                failed_count = 0 if clips_created > 0 else 1
+                final_status = "partial" if clips_created > 0 else "failed"
             else:
-                final_status = "done"
-
+                failed_count = total_with_prompts - clips_created - len(already_done)
+                if clips_created == 0:
+                    final_status = "failed"
+                elif failed_count > 0:
+                    final_status = "partial"
+                else:
+                    final_status = "done"
             db.set_agent_status(self.agent_name, chapter_id, final_status)
             db.log(
                 self.agent_name, chapter_id,
@@ -623,6 +951,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     "already_done": len(already_done),
                     "failed_count": failed_count,
                     "status": final_status,
+                    "target_shot_num": target_shot_num,
                 },
             )
 
@@ -634,6 +963,7 @@ class ShotVideoGeneratorAgent(AgentInterface):
                     "already_done": len(already_done),
                     "failed_count": failed_count,
                     "status": final_status,
+                    "target_shot_num": target_shot_num,
                 },
             )
 

@@ -1,0 +1,76 @@
+# AI 漫剧生成助手 — 配置文件模板
+# 复制此文件为 settings.yaml 并填入你的 API Key
+# cp config/settings.example.yaml config/settings.yaml
+#
+# 所有值均可通过同名环境变量覆盖（前缀 AICOMIC_），例如：
+#   export AICOMIC_DEEPSEEK_API_KEY=sk-xxx
+
+# 后端选择: "deepseek" (默认) 或 "claude"
+backend: "deepseek"
+
+deepseek:
+  api_key: ""                    # DeepSeek API Key: https://platform.deepseek.com/api_keys
+  model: "deepseek-chat"        # deepseek-chat (V3) 或 deepseek-reasoner (R1)
+  base_url: "https://api.deepseek.com"
+
+anthropic:
+  api_key: ""                    # Anthropic API Key: https://console.anthropic.com/
+  model: "claude-sonnet-5-20251001"
+
+database:
+  path: "data/aicomic.db"
+
+doubao:
+  state_file: "data/doubao_state.json"
+  cookie_file: "data/doubao_cookies.json"  # legacy fallback
+  headless: false                # 豆包需要可见浏览器才能生成；Docker 必须改为 true
+  timeout_sec: 300
+  poll_interval_sec: 3
+  rate_limit_sec: 10
+  output_dir: "data/"
+  video_page_url: "https://jimeng.jianying.com/ai-tool/video/generate"
+  pages:
+    image: "https://www.doubao.com/chat/create-image"
+    video: "https://www.doubao.com/chat/create-video"
+  selectors:
+    image:
+      prompt_input: 'div[contenteditable="true"][role="textbox"]'
+      generate_method: "enter"
+      status_done_keywords: ["已生成", "生成成功"]
+      status_failed_keywords: ["无法生成", "生成失败", "违规"]
+      save_button_strategy: "dbx-highlight"
+      save_button_js: |
+        (() => {
+          const btns = document.querySelectorAll('[data-dbx-name="button"], button');
+          for (const el of btns) {
+            const r = el.getBoundingClientRect();
+            if (r.y > 200 || r.y < 20) continue;
+            if ((el.className || '').includes('bg-dbx-text-highlight'))
+              return {x: r.x + r.width/2, y: r.y + r.height/2};
+          }
+          return null;
+        })()
+      ratio_trigger: 'div[role="button"]:has(svg)'
+      ratio_1_1: 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio1_1.png"])'
+      ratio_16_9: 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio16_9.png"])'
+      ratio_9_16: 'div[role="menuitem"][data-slot="dropdown-menu-item"]:has(img[src*="ratio9_16.png"])'
+    video:
+      prompt_input: "textarea[placeholder*='描述']"
+      generate_btn: "button:has-text('生成')"
+      result_video: "video"
+      status_done: "[class*='success']"
+      status_failed: "[class*='error']"
+
+video:
+  generator: "mock"               # "mock" 跳过视频, "doubao" 真实生成（需豆包 Cookie）
+  output_dir: "data/videos/"
+  shot_video_duration_sec: 5
+
+logging:
+  level: "INFO"
+
+parsers:
+  pdf:
+    min_text_chars: 50
+    ocr_dpi: 300
+    ocr_langs: "chi_sim+eng"

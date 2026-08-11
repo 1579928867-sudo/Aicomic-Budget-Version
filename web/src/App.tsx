@@ -1,4 +1,5 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { ChatPage } from './pages/ChatPage';
 import { LibraryPage } from './pages/LibraryPage';
@@ -6,14 +7,8 @@ import { VideosPage } from './pages/VideosPage';
 import { CookiePage } from './pages/CookiePage';
 import { TasksPage } from './pages/TasksPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { useAppStore } from './stores/app';
 
 const HomePage = lazy(() => import('./pages/HomePage'));
-
-const PAGES: Record<string, React.ComponentType> = {
-  chat: ChatPage, library: LibraryPage, videos: VideosPage,
-  cookie: CookiePage, tasks: TasksPage, settings: SettingsPage,
-};
 
 function LoadingScreen() {
   return (
@@ -28,10 +23,42 @@ function LoadingScreen() {
   );
 }
 
-export default function App() {
-  const activePage = useAppStore(s => s.activePage);
+// URL path → page key and component
+const PAGES: Record<string, React.ComponentType> = {
+  chat: ChatPage, library: LibraryPage, videos: VideosPage,
+  cookie: CookiePage, tasks: TasksPage, settings: SettingsPage,
+};
 
-  if (activePage === 'home') {
+const PATH_TO_KEY: Record<string, string> = {
+  '/chat': 'chat', '/library': 'library', '/videos': 'videos',
+  '/cookie': 'cookie', '/tasks': 'tasks', '/settings': 'settings',
+};
+
+// All inner pages always mounted to preserve state (chat messages, scroll, etc.)
+function WorkArea() {
+  const location = useLocation();
+  const loadedPages = useRef<Set<string>>(new Set(['chat']));
+  const pageKey = PATH_TO_KEY[location.pathname] || 'chat';
+  loadedPages.current.add(pageKey);
+
+  return (
+    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
+      <Sidebar />
+      {Object.entries(PAGES).map(([key, Component]) => (
+        loadedPages.current.has(key) ? (
+          <main key={key} className="flex-1 overflow-auto" style={{ padding: '40px', display: key === pageKey ? 'block' : 'none' }}>
+            <Component />
+          </main>
+        ) : null
+      ))}
+    </div>
+  );
+}
+
+export default function App() {
+  const location = useLocation();
+
+  if (location.pathname === '/') {
     return (
       <Suspense fallback={<LoadingScreen />}>
         <HomePage />
@@ -39,14 +66,5 @@ export default function App() {
     );
   }
 
-  const Page = PAGES[activePage] || ChatPage;
-
-  return (
-    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
-      <Sidebar />
-      <main className="flex-1 overflow-auto" style={{ padding: '40px' }}>
-        <Page />
-      </main>
-    </div>
-  );
+  return <WorkArea />;
 }

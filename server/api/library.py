@@ -1,21 +1,14 @@
-"""素材库 REST 端点 — novels, chapters, characters, scenes, scripts, shots, upload."""
+"""素材库 REST 端点 — novels, chapters, characters, scenes, scripts, shots, upload, delete."""
 import json
 import re
-import sqlite3
 import tempfile
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File
+from server.db import get_db
 
 DB_PATH = Path("data/aicomic.db")
 
 router = APIRouter(prefix="/api", tags=["library"])
-
-
-def _get_conn() -> sqlite3.Connection:
-    """获取数据库连接 (每次请求新建，线程安全)."""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 # ── Novels ──
@@ -23,7 +16,7 @@ def _get_conn() -> sqlite3.Connection:
 @router.get("/novels")
 def list_novels():
     """所有小说列表."""
-    conn = _get_conn()
+    conn = get_db()
     try:
         rows = conn.execute(
             "SELECT id, title, author, created_at FROM novel ORDER BY created_at DESC"
@@ -36,7 +29,7 @@ def list_novels():
 @router.get("/novels/{novel_id}/chapters")
 def list_chapters(novel_id: int):
     """某小说的所有章节."""
-    conn = _get_conn()
+    conn = get_db()
     try:
         rows = conn.execute(
             "SELECT id, novel_id, chapter_num, status, created_at FROM chapter "
@@ -54,7 +47,7 @@ def merge_novels(source_id: int, target_id: int):
 
     用于修复历史上因文件名不同导致的重复小说问题。
     """
-    conn = _get_conn()
+    conn = get_db()
     try:
         src = conn.execute("SELECT id, title FROM novel WHERE id = ?", (source_id,)).fetchone()
         dst = conn.execute("SELECT id, title FROM novel WHERE id = ?", (target_id,)).fetchone()
@@ -69,6 +62,7 @@ def merge_novels(source_id: int, target_id: int):
 
         # 删除被合并的 novel
         conn.execute("DELETE FROM novel WHERE id = ?", (source_id,))
+        _cleanup_orphans(conn)
         conn.commit()
 
         return {
@@ -81,14 +75,217 @@ def merge_novels(source_id: int, target_id: int):
         conn.close()
 
 
+def _cleanup_orphans(conn) -> dict:
+    """清理不再被任何章节引用的 character_card/outfit 和 scene_card。
+
+    只在所有关联 shot 关系被删除后调用。安全：只删除零引用的对象。
+    返回: {"characters": int, "scenes": int}
+    """
+    import os as _os
+    count_c = 0
+    count_s = 0
+
+    # ── 孤角色 outfit（该 character 不再出现在任何 shot_character_outfit 中）──
+    orphan_outfits = conn.execute("""
+        SELECT co.id, co.character_id, co.image_path
+        FROM character_outfit co
+        WHERE co.character_id NOT IN (
+            SELECT DISTINCT sco.character_id FROM shot_character_outfit sco
+        )
+    """).fetchall()
+    for oo in orphan_outfits:
+        # 删除图片文件
+        if oo["image_path"] and _os.path.exists(oo["image_path"]):
+            _os.remove(oo["image_path"])
+        conn.execute("DELETE FROM character_outfit WHERE id = ?", (oo["id"],))
+        count_c += 1
+
+    # ── 孤 character_card ──
+    conn.execute("""
+        DELETE FROM character_card
+        WHERE id NOT IN (
+            SELECT DISTINCT sco.character_id FROM shot_character_outfit sco
+        )
+        AND id NOT IN (
+            SELECT DISTINCT character_id FROM character_outfit
+        )
+    """)
+
+    # ── 孤场景图片 ──
+    orphan_scenes = conn.execute("""
+        SELECT sc.id, sc.multi_view_image, sc.wide_image, sc.mid_image, sc.close_image
+        FROM scene_card sc
+        WHERE sc.id NOT IN (
+            SELECT DISTINCT ss.scene_id FROM storyboard_shot ss WHERE ss.scene_id IS NOT NULL
+        )
+    """).fetchall()
+    for os_ in orphan_scenes:
+        for col in ["multi_view_image", "wide_image", "mid_image", "close_image"]:
+            p = os_[col]
+            if p and _os.path.exists(p):
+                _os.remove(p)
+        conn.execute("DELETE FROM scene_card WHERE id = ?", (os_["id"],))
+        count_s += 1
+
+    return {"characters": count_c, "scenes": count_s}
+
+
+@router.delete("/novels/{novel_id}")
+def delete_novel(novel_id: int):
+    """删除小说及其所有章节、分镜、视频等关联数据。"""
+    import os as _os
+    conn = get_db()
+    try:
+        novel = conn.execute("SELECT id, title FROM novel WHERE id = ?", (novel_id,)).fetchone()
+        if not novel:
+            raise HTTPException(404, "Novel not found")
+
+        # 收集关联数据路径
+        deleted_files = 0
+        chapters = conn.execute("SELECT id FROM chapter WHERE novel_id = ?", (novel_id,)).fetchall()
+        for ch in chapters:
+            cid = ch["id"]
+            # 收集视频文件路径
+            clips = conn.execute("""
+                SELECT vc.file_path FROM video_clip vc
+                JOIN storyboard_shot ss ON ss.id = vc.shot_id
+                JOIN script s ON s.id = ss.script_id
+                WHERE s.chapter_id = ?
+            """, (cid,)).fetchall()
+            for cl in clips:
+                if cl["file_path"] and _os.path.exists(cl["file_path"]):
+                    _os.remove(cl["file_path"]); deleted_files += 1
+
+            finals = conn.execute(
+                "SELECT file_path FROM final_video WHERE chapter_id = ?", (cid,)
+            ).fetchall()
+            for fv in finals:
+                if fv["file_path"] and _os.path.exists(fv["file_path"]):
+                    _os.remove(fv["file_path"]); deleted_files += 1
+
+            # 收集图片文件
+            img_rows = conn.execute("""
+                SELECT co.image_path FROM character_outfit co
+                JOIN shot_character_outfit sco ON sco.character_id = co.character_id
+                JOIN storyboard_shot ss ON ss.id = sco.shot_id
+                JOIN script s ON s.id = ss.script_id
+                WHERE s.chapter_id = ? AND co.image_path != ''
+            """, (cid,)).fetchall()
+            for ir in img_rows:
+                if ir["image_path"] and _os.path.exists(ir["image_path"]):
+                    _os.remove(ir["image_path"]); deleted_files += 1
+
+            # 删除关联数据 (按依赖顺序)
+            conn.execute("DELETE FROM video_clip WHERE shot_id IN (SELECT ss.id FROM storyboard_shot ss JOIN script s ON s.id=ss.script_id WHERE s.chapter_id=?)", (cid,))
+            conn.execute("DELETE FROM shot_character_outfit WHERE shot_id IN (SELECT ss.id FROM storyboard_shot ss JOIN script s ON s.id=ss.script_id WHERE s.chapter_id=?)", (cid,))
+            conn.execute("DELETE FROM storyboard_shot WHERE script_id IN (SELECT id FROM script WHERE chapter_id=?)", (cid,))
+            conn.execute("DELETE FROM final_video WHERE chapter_id = ?", (cid,))
+            conn.execute("DELETE FROM script WHERE chapter_id = ?", (cid,))
+            conn.execute("DELETE FROM task_log WHERE chapter_id = ?", (cid,))
+            conn.execute("DELETE FROM chat_message WHERE chapter_id = ?", (cid,))
+            conn.execute("DELETE FROM task WHERE chapter_id = ?", (cid,))
+            conn.execute("DELETE FROM chapter WHERE id = ?", (cid,))
+
+        conn.execute("DELETE FROM novel WHERE id = ?", (novel_id,))
+
+        # ── 清理全局无引用孤对象 ──
+        deleted_orphans = _cleanup_orphans(conn)
+
+        conn.commit()
+
+        return {
+            "status": "ok",
+            "deleted_novel": {"id": novel["id"], "title": novel["title"]},
+            "deleted_chapters": len(chapters),
+            "deleted_files": deleted_files,
+            "cleaned_orphans": deleted_orphans,
+        }
+    finally:
+        conn.close()
+
+
+@router.delete("/chapters/{chapter_id}")
+def delete_chapter(chapter_id: int):
+    """删除单个章节及其分镜、视频等关联数据。"""
+    import os as _os
+    conn = get_db()
+    try:
+        ch = conn.execute("SELECT id, novel_id, chapter_num FROM chapter WHERE id = ?", (chapter_id,)).fetchone()
+        if not ch:
+            raise HTTPException(404, "Chapter not found")
+
+        deleted_files = 0
+
+        # 收集并删除视频文件
+        clips = conn.execute("""
+            SELECT vc.file_path FROM video_clip vc
+            JOIN storyboard_shot ss ON ss.id = vc.shot_id
+            JOIN script s ON s.id = ss.script_id
+            WHERE s.chapter_id = ?
+        """, (chapter_id,)).fetchall()
+        for cl in clips:
+            if cl["file_path"] and _os.path.exists(cl["file_path"]):
+                _os.remove(cl["file_path"]); deleted_files += 1
+
+        finals = conn.execute(
+            "SELECT file_path FROM final_video WHERE chapter_id = ?", (chapter_id,)
+        ).fetchall()
+        for fv in finals:
+            if fv["file_path"] and _os.path.exists(fv["file_path"]):
+                _os.remove(fv["file_path"]); deleted_files += 1
+
+        # 收集并删除图片
+        img_rows = conn.execute("""
+            SELECT co.image_path FROM character_outfit co
+            JOIN shot_character_outfit sco ON sco.character_id = co.character_id
+            JOIN storyboard_shot ss ON ss.id = sco.shot_id
+            JOIN script s ON s.id = ss.script_id
+            WHERE s.chapter_id = ? AND co.image_path != ''
+        """, (chapter_id,)).fetchall()
+        for ir in img_rows:
+            if ir["image_path"] and _os.path.exists(ir["image_path"]):
+                _os.remove(ir["image_path"]); deleted_files += 1
+
+        # 删除关联数据
+        conn.execute("DELETE FROM video_clip WHERE shot_id IN (SELECT ss.id FROM storyboard_shot ss JOIN script s ON s.id=ss.script_id WHERE s.chapter_id=?)", (chapter_id,))
+        conn.execute("DELETE FROM shot_character_outfit WHERE shot_id IN (SELECT ss.id FROM storyboard_shot ss JOIN script s ON s.id=ss.script_id WHERE s.chapter_id=?)", (chapter_id,))
+        conn.execute("DELETE FROM storyboard_shot WHERE script_id IN (SELECT id FROM script WHERE chapter_id=?)", (chapter_id,))
+        conn.execute("DELETE FROM final_video WHERE chapter_id = ?", (chapter_id,))
+        conn.execute("DELETE FROM script WHERE chapter_id = ?", (chapter_id,))
+        conn.execute("DELETE FROM task_log WHERE chapter_id = ?", (chapter_id,))
+        conn.execute("DELETE FROM chat_message WHERE chapter_id = ?", (chapter_id,))
+        conn.execute("DELETE FROM task WHERE chapter_id = ?", (chapter_id,))
+        conn.execute("DELETE FROM chapter WHERE id = ?", (chapter_id,))
+
+        # ── 清理全局无引用孤对象 ──
+        deleted_orphans = _cleanup_orphans(conn)
+
+        conn.commit()
+
+        return {
+            "status": "ok",
+            "deleted_chapter": {"id": ch["id"], "chapter_num": ch["chapter_num"]},
+            "deleted_files": deleted_files,
+            "cleaned_orphans": deleted_orphans,
+        }
+    finally:
+        conn.close()
+
+
 # ── Characters ──
 
 @router.get("/chapters/{chapter_id}/characters")
 def list_characters(chapter_id: int):
-    """某章节关联的所有角色及其 outfit."""
-    conn = _get_conn()
+    """某章节关联的所有角色及其 outfit.
+
+    两条路径:
+    1. 主路径: 通过 shot_character_outfit 联结表 (v0.12+, 支持多装扮)
+    2. 降级路径: 直接从 storyboard_shot.char_ids 解析角色ID
+       — 适用于旧管线跑的章节（联结表无数据但 shot 里有 char_ids）
+    """
+    conn = get_db()
     try:
-        # 通过 shot_character_outfit 找到章节中出现的角色
+        # 步骤1: 尝试 shot_character_outfit 联结表
         rows = conn.execute("""
             SELECT DISTINCT cc.id, cc.name, cc.status
             FROM character_card cc
@@ -99,10 +296,37 @@ def list_characters(chapter_id: int):
             ORDER BY cc.name
         """, (chapter_id,)).fetchall()
 
+        # 步骤2: 降级 — 从 shot.char_ids 直接解析
+        if not rows:
+            # 获取该章节最新 script 的所有 shot 的 char_ids
+            shot_rows = conn.execute("""
+                SELECT ss.char_ids FROM storyboard_shot ss
+                INNER JOIN script s ON s.id = ss.script_id
+                WHERE s.chapter_id = ?
+            """, (chapter_id,)).fetchall()
+
+            # 汇总所有出现过的角色 ID
+            seen_ids = set()
+            for sr in shot_rows:
+                try:
+                    ids = json.loads(sr["char_ids"] or "[]")
+                    for cid in ids:
+                        if isinstance(cid, int):
+                            seen_ids.add(cid)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            if seen_ids:
+                placeholders = ",".join("?" * len(seen_ids))
+                rows = conn.execute(
+                    f"""SELECT id, name, status FROM character_card
+                        WHERE id IN ({placeholders}) ORDER BY name""",
+                    tuple(seen_ids),
+                ).fetchall()
+
         characters = []
         for row in rows:
             char = dict(row)
-            # 查询 outfits
             outfits = conn.execute("""
                 SELECT id, tag, prompt, image_path, is_default
                 FROM character_outfit
@@ -122,11 +346,12 @@ def list_characters(chapter_id: int):
 @router.get("/chapters/{chapter_id}/scenes")
 def list_scenes(chapter_id: int):
     """某章节关联的所有场景."""
-    conn = _get_conn()
+    conn = get_db()
     try:
         rows = conn.execute("""
             SELECT DISTINCT sc.id, sc.name, sc.description, sc.lighting, sc.style,
-                   sc.wide_view, sc.mid_view, sc.close_view, sc.status
+                   sc.wide_view, sc.mid_view, sc.close_view, sc.status,
+                   sc.multi_view_image, sc.wide_image, sc.mid_image, sc.close_image
             FROM scene_card sc
             INNER JOIN storyboard_shot ss ON ss.scene_id = sc.id
             INNER JOIN script s ON s.id = ss.script_id
@@ -137,9 +362,10 @@ def list_scenes(chapter_id: int):
         scenes = []
         for row in rows:
             scene = dict(row)
-            # 合并 multi-view 为单个字段 (取第一个非空的 view)
+            # 合并多图路径为单个字段: multi_view_image > wide_image > mid_image > close_image
             scene["multi_view_image"] = (
-                scene.get("wide_view") or scene.get("mid_view") or scene.get("close_view") or ""
+                scene.get("multi_view_image") or scene.get("wide_image")
+                or scene.get("mid_image") or scene.get("close_image") or ""
             )
             scenes.append(scene)
 
@@ -153,7 +379,7 @@ def list_scenes(chapter_id: int):
 @router.get("/chapters/{chapter_id}/script")
 def get_script(chapter_id: int):
     """某章节的剧本 JSON."""
-    conn = _get_conn()
+    conn = get_db()
     try:
         row = conn.execute(
             "SELECT id, raw_json, status FROM script WHERE chapter_id = ? ORDER BY id DESC LIMIT 1",
@@ -173,7 +399,7 @@ def get_script(chapter_id: int):
 @router.get("/chapters/{chapter_id}/shots")
 def list_shots(chapter_id: int):
     """某章节的所有分镜."""
-    conn = _get_conn()
+    conn = get_db()
     try:
         # 获取最新 script
         script_row = conn.execute(
@@ -313,9 +539,7 @@ async def upload_file(file: UploadFile = File(...)):
         clean_title = _extract_novel_title(filename)
         detected_ch = _detect_chapter_num(filename)
 
-        import sqlite3 as _sqlite3
-        conn = _sqlite3.connect(str(DB_PATH))
-        conn.row_factory = _sqlite3.Row
+        conn = get_db()
         try:
             novel_id = _find_novel(conn, clean_title)
 

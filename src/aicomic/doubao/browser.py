@@ -162,6 +162,7 @@ class DoubaoBrowserClient:
         self._playwright = None
         self._browser = None
         self._context = None
+        self._browser_thread_id: int | None = None  # Track which thread owns the browser
 
         # Rate limiting
         self._last_call_time: float = 0.0
@@ -194,6 +195,28 @@ class DoubaoBrowserClient:
             except Exception:
                 self._cookies = []
 
+    def _is_storage_state_stale(self) -> bool:
+        """Check if storageState file only has cookies (from manual paste) vs a full session.
+
+        A full session from login_doubao.py has 'origins' with localStorage entries.
+        A minimal one from manual cookie paste only has 'cookies'.
+        If it's minimal, we should still use it but also inject any extra cookies from cookie_file.
+        """
+        if not self.state_file.exists():
+            return False
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            # Full session has non-empty origins with localStorage
+            origins = state.get("origins", [])
+            has_local_storage = any(
+                o.get("localStorage") and len(o["localStorage"]) > 0
+                for o in origins
+            )
+            return not has_local_storage
+        except Exception:
+            return False
+
     # ── Browser lifecycle ──
 
     def ensure_browser(self):
@@ -205,8 +228,29 @@ class DoubaoBrowserClient:
         Includes crash recovery: if the browser or context was closed externally
         (e.g. user manually closed the window), the stale references are cleared
         and a fresh browser is launched.
+
+        Thread safety: Playwright's sync API binds browser objects to the
+        creating thread. If ensure_browser() is called from a different thread
+        than the one that created the browser, the old browser is destroyed and
+        a new one is created on the current thread. This handles the
+        ThreadPoolExecutor usage in PipelineRunner and AgentRunner.
         """
+        import threading
         configure_output_encoding()
+
+        current_thread_id = threading.get_ident()
+
+        # ── Cross-thread detection: if the browser was created on a different
+        # thread, destroy it and recreate on the current thread. Playwright
+        # sync API objects are not usable across threads — using them from a
+        # different thread causes silent failures (no errors, but no output). ──
+        if (self._browser is not None
+                and self._browser_thread_id is not None
+                and self._browser_thread_id != current_thread_id):
+            print(f"    [Browser] ⚠ 检测到跨线程使用 "
+                  f"(browser在线程{self._browser_thread_id}, "
+                  f"当前线程{current_thread_id})，重建中...")
+            self._teardown_browser()
 
         if self._browser is not None and self._context is not None:
             try:
@@ -215,21 +259,19 @@ class DoubaoBrowserClient:
                 return
             except Exception:
                 print("    [Browser] ⚠ 检测到浏览器已关闭，正在重建...")
-                self._browser = None
-                self._context = None
-                if self._playwright:
-                    try:
-                        self._playwright.stop()
-                    except Exception:
-                        pass
-                    self._playwright = None
+                self._teardown_browser()
 
         from playwright.sync_api import sync_playwright
 
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
             headless=self.headless,
-            args=["--disable-blink-features=AutomationControlled"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-gpu",            # 防止 GPU 驱动不兼容导致闪退
+                "--no-first-run",           # 跳过首次运行向导
+                "--no-default-browser-check",
+            ],
         )
 
         # Configure downloads
@@ -255,8 +297,16 @@ class DoubaoBrowserClient:
             except Exception:
                 pass  # Cookies may be invalid for this domain
 
-    def close(self):
-        """Clean up browser and Playwright resources. Safe to call multiple times."""
+        # Record which thread owns this browser (for cross-thread detection)
+        import threading
+        self._browser_thread_id = threading.get_ident()
+
+    def _teardown_browser(self):
+        """Destroy browser, context, and playwright. Resets all browser state.
+
+        Safe to call from any thread — each teardown step is independently
+        guarded against exceptions.
+        """
         if self._context:
             try:
                 self._context.close()
@@ -275,6 +325,11 @@ class DoubaoBrowserClient:
             except Exception:
                 pass
             self._playwright = None
+        self._browser_thread_id = None
+
+    def close(self):
+        """Clean up browser and Playwright resources. Safe to call multiple times."""
+        self._teardown_browser()
 
     # ── Rate limiting ──
 
@@ -619,7 +674,8 @@ class DoubaoBrowserClient:
     # ── Core: Shot video generation (image-to-video on image page) ──
 
     def generate_video_from_images(
-        self, prompt: str, reference_images: list[str], duration_sec: float = 5.0
+        self, prompt: str, reference_images: list[str], duration_sec: float = 5.0,
+        video_model: str = "fast",
     ) -> ImageResult:
         """Generate a video from reference images + prompt via Doubao image page.
 
@@ -680,66 +736,98 @@ class DoubaoBrowserClient:
                 # Radix UI tabs-trigger button inside a carousel-item.
                 # Retry up to 3 times, verifying data-state="active".
                 tab_switched = False
-                for attempt in range(3):
+                _tab_selectors = [
+                    # Radix UI tabs (current)
+                    '[data-slot="tabs-trigger"]',
+                    # Generic tab list items
+                    '[role="tab"]',
+                    # Fallback: any button-like element
+                    'button, [role="button"], [class*="tab"]',
+                ]
+                for attempt in range(5):
                     try:
-                        # Find the tab button's bounding box, click it
-                        # via Playwright (full mouse event sequence), then
-                        # verify data-state is "active".
-                        box = page.evaluate("""() => {
-                            const tabs = document.querySelectorAll(
-                                '[data-slot="tabs-trigger"]');
-                            for (const t of tabs) {
-                                if ((t.textContent || '').trim() === '视频') {
-                                    const r = t.getBoundingClientRect();
-                                    return {x: r.x + r.width/2, y: r.y + r.height/2,
-                                            w: r.width, h: r.height};
-                                }
-                            }
-                            return null;
-                        }""")
-                        if box:
-                            page.mouse.click(box["x"], box["y"])
-                            page.wait_for_timeout(1500)
-                            # Verify: did the tab actually activate?
-                            active = page.evaluate("""() => {
-                                const tabs = document.querySelectorAll(
-                                    '[data-slot="tabs-trigger"]');
-                                for (const t of tabs) {
-                                    if ((t.textContent || '').trim() === '视频') {
-                                        return t.getAttribute('data-state');
-                                    }
-                                }
+                        # Try each selector strategy
+                        for sel in _tab_selectors:
+                            box = page.evaluate(f"""(selector) => {{
+                                const items = document.querySelectorAll(selector);
+                                for (const t of items) {{
+                                    const txt = (t.textContent || '').trim();
+                                    if (txt === '视频' || txt.startsWith('视频')) {{
+                                        const r = t.getBoundingClientRect();
+                                        if (r.width > 0 && r.height > 0) {{
+                                            return {{x: r.x + r.width/2, y: r.y + r.height/2,
+                                                    w: r.width, h: r.height, txt: txt, sel: selector}};
+                                        }}
+                                    }}
+                                }}
                                 return null;
-                            }""")
-                            if active == "active":
-                                print(f"    [Doubao] ✓ 已切换到「视频」tab "
-                                      f"(data-state=active)")
-                                tab_switched = True
-                                break
-                            else:
-                                print(f"    [Doubao] 「视频」tab state={active}, "
-                                      f"重试 ({attempt+1}/3)...")
-                                page.wait_for_timeout(1000)
-                        else:
-                            if attempt < 2:
-                                page.wait_for_timeout(1500)
-                            else:
-                                print(f"    [Doubao] ⚠ 未找到「视频」tab")
+                            }}""", sel)
+                            if box:
+                                sel_found = box.get("sel", sel)
+                                txt_found = box.get("txt", "视频")
+                                page.mouse.click(box["x"], box["y"])
+                                page.wait_for_timeout(1800)
+                                # Verify tab is active
+                                active = page.evaluate("""() => {
+                                    const all = document.querySelectorAll(
+                                        '[data-slot="tabs-trigger"], [role="tab"]');
+                                    for (const t of all) {
+                                        const txt = (t.textContent || '').trim();
+                                        if (txt === '视频' || txt.startsWith('视频')) {
+                                            const st = t.getAttribute('data-state');
+                                            const sel = t.getAttribute('aria-selected');
+                                            return st === 'active' || sel === 'true' ? 'active' : null;
+                                        }
+                                    }
+                                    return null;
+                                }""")
+                                if active == "active":
+                                    print(f"    [Doubao] ✓ 已切换到「{txt_found}」tab (selector={sel_found})")
+                                    tab_switched = True
+                                    break
+                                else:
+                                    print(f"    [Doubao] 「{txt_found}」tab 未激活，重试 ({attempt+1}/5)...")
+                                    page.wait_for_timeout(1000)
+                                    break  # retry with all selectors
+                        if tab_switched:
+                            break
+                        if attempt < 4:
+                            page.wait_for_timeout(1500)
                     except Exception as e:
-                        if attempt < 2:
+                        if attempt < 4:
                             page.wait_for_timeout(1000)
                         else:
                             print(f"    [Doubao] ⚠ 切换视频tab异常: {e}")
 
                 if not tab_switched:
-                    print(f"    [Doubao] ⚠ 无法切换到视频tab，"
-                          f"依赖prompt中的'生成视频'关键词兜底")
+                    debug_png = ""
+                    try:
+                        debug_png = str(self.output_dir / "debug" / "doubao_no_video_tab.png")
+                        Path(debug_png).parent.mkdir(parents=True, exist_ok=True)
+                        page.screenshot(path=debug_png)
+                    except Exception:
+                        pass
+                    # Fail fast — don't silently proceed on wrong tab
+                    msg = (
+                        "豆包页面未找到「视频」tab（重试5次仍失败）。\n\n"
+                        "可能原因：豆包页面改版导致 tab 选择器失效。\n"
+                        + (f"调试截图: {debug_png}\n" if debug_png else "")
+                        + "\n请检查豆包页面是否正常显示「视频」tab，或联系开发者更新选择器。"
+                    )
+                    return ImageResult(
+                        success=False, file_path="",
+                        error=msg,
+                        metadata={"reason": "video_tab_not_found", "debug_screenshot": debug_png},
+                    )
 
-                # ── 2.6 Switch to Fast model (Seedance 2.0 Fast) ──
-                try:
-                    self._switch_video_model(page, DOUBAO_VIDEO_MODEL)
-                except Exception as e:
-                    print(f"    [Doubao] ⚠ 模型切换异常(忽略): {e}")
+                # ── 2.6 Switch video model if user selected Fast ──
+                if video_model == "fast":
+                    try:
+                        self._switch_video_model(page, DOUBAO_VIDEO_MODEL)
+                    except Exception as e:
+                        print(f"    [Doubao] ⚠ 模型切换异常(忽略): {e}")
+                else:
+                    print(f"    [Doubao] ✓ 使用默认 Mini 模型（无需切换）")
 
                 # ── 3. Find the actual active input (changes after tab switch) ──
                 # After switching to 视频 tab, the image-page input is hidden.
@@ -898,11 +986,15 @@ class DoubaoBrowserClient:
                             print(f"    [Doubao] ✓ 检测到内容: {content_type}")
                         break
 
-                    # Moderation check (only after grace period)
+                    # ── Moderation: always check hard blocks (侵权/违规),
+                    #     only check soft blocks (真实人脸/版权) after grace period ──
+                    body_text = page.inner_text("body")
+                    blocked = None
                     if elapsed > moderation_grace_period:
-                        body_text = page.inner_text("body")
                         blocked = self._check_moderation_block(body_text)
-                        if blocked:
+                    else:
+                        blocked = self._check_hard_block(body_text)
+                    if blocked:
                             debug_html = str(
                                 self.output_dir / "debug"
                                 / f"doubao_moderation_{vid_id}.html"
@@ -1462,59 +1554,73 @@ class DoubaoBrowserClient:
 
         return attachment_count
 
+    # ── Moderation keyword → (reason_tag, suggestion) registry ──
+    _BLOCK_RULES: list[tuple[str, str, str]] = [
+        # -- Hard blocks: ONLY appear in Doubao rejection UI, NEVER in our prompts.
+        #    Safe to check immediately after sending (no grace period needed). --
+        ("涉嫌侵权", "侵权/违规拦截",
+         "Prompt 或参考图被判定侵权 → 移除具体作品名/IP 名称"),
+        ("违规内容，无法返回", "侵权/违规拦截",
+         "触发豆包安全审核 → 检查 prompt 是否含敏感剧情"),
+        ("换个主题再试试", "内容拒审",
+         "豆包拒绝生成 → 简化 prompt，降低细节密度"),
+        ("生成额度未扣除", "内容拒审",
+         "被豆包安全审核拦截 → 调整 prompt 后重试"),
+        ("审核不通过", "审核拦截",
+         "触发审核 → 移除可能涉暴词汇"),
+        ("违反社区规范", "内容违规",
+         "prompt 触犯内容政策 → 检查是否含血腥/政治"),
+        ("不符合内容规范", "内容不符合规范",
+         "prompt 不符合内容规范 → 简化描述"),
+        ("无法生成该内容", "内容拒审",
+         "豆包拒绝生成 → 缩短prompt，降低细节密度"),
+        ("生成失败，请稍后重试", "生成失败",
+         "豆包返回生成失败 → 缩短prompt或减少参考图"),
+        # -- Quota / rate-limit (Doubao-specific) --
+        ("今日视频生成免费次数用完了", "额度耗尽",
+         "豆包每日免费额度已用完 → 等明天重置，或开通专业版"),
+        ("开通豆包专业版加强套餐", "额度耗尽",
+         "豆包每日免费额度已用完 → 等明天重置，或开通专业版"),
+        # -- Soft blocks: COULD match fragments of our prompt text
+        #    (e.g. "面部" in camera angles, "版权" in copyright declaration).
+        #    Only checked after grace period (25s). --
+        ("真实人脸", "真实人脸检测",
+         "参考图中检测到真实人脸特征 → 降低写实度"),
+        ("真人照片", "真人检测",
+         "参考图被判定含真人照片 → 降低写实度"),
+        ("面部识别", "面部识别拦截",
+         "参考图含可识别面部 → 无需调整，可直接重试"),
+        ("侵犯版权", "版权拦截",
+         "prompt 被判定含侵权内容 → 移除具体作品名"),
+        ("版权保护", "版权拦截",
+         "prompt 被判定含版权内容 → 加'原创角色'声明"),
+        ("包含裸露", "敏感图像",
+         "含敏感图像描述 → 确保所有角色穿着完整"),
+        ("包含暴力", "暴力内容",
+         "含暴力描述 → 移除打斗/流血词汇"),
+        ("包含血腥", "血腥内容",
+         "含血腥描述 → 改为抽象表述"),
+    ]
+
+    # Index of rule keywords that are safe for early (pre-grace-period) checks.
+    _HARD_BLOCK_INDICES: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+
     @staticmethod
     def _check_moderation_block(body_text: str) -> dict | None:
-        """Check page text for Doubao moderation/rejection signals.
-
-        Doubao silently rejects video generation for various reasons. The model
-        stops generating and displays a rejection message instead of a video.
-        This method detects those messages and returns structured info so the
-        caller can adjust the prompt and retry.
-
-        Returns None if no block detected, or a dict with reason + suggestion.
-        """
-        # ── Keyword → (reason_tag, suggestion) mappings ──
-        # IMPORTANT: keep keywords as specific multi-word phrases.
-        # Single-word keywords like "面部" or "版权" will false-positive
-        # on the prompt text we just typed (e.g. "镜头从面部近景..."
-        # and "我有版权"). Grace period handles most cases, but specific
-        # keywords reduce the risk window.
-        BLOCK_RULES = [
-            # Real-face / portrait rejection (most common for character refs)
-            ("真实人脸", "真实人脸检测",
-             "参考图中检测到真实人脸特征 → 降低写实度"),
-            ("真人照片", "真人检测",
-             "参考图被判定含真人照片 → 降低写实度"),
-            ("面部识别", "面部识别拦截",
-             "参考图含可识别面部 → 无需调整，可直接重试"),
-            # Copyright / infringement (multi-word to avoid matching "版权" in prompt)
-            ("侵犯版权", "版权拦截",
-             "prompt 被判定含侵权内容 → 移除具体作品名"),
-            ("版权保护", "版权拦截",
-             "prompt 被判定含版权内容 → 加'原创角色'声明"),
-            # Content policy violations
-            ("违反社区规范", "内容违规",
-             "prompt 触犯内容政策 → 检查是否含血腥/政治"),
-            ("不符合内容规范", "内容不符合规范",
-             "prompt 不符合内容规范 → 简化描述"),
-            ("无法生成该内容", "内容拒审",
-             "豆包拒绝生成 → 缩短prompt，降低细节密度"),
-            ("审核不通过", "审核拦截",
-             "触发审核 → 移除可能涉暴词汇"),
-            # Sensitive imagery
-            ("包含裸露", "敏感图像",
-             "含敏感图像描述 → 确保所有角色穿着完整"),
-            ("包含暴力", "暴力内容",
-             "含暴力描述 → 移除打斗/流血词汇"),
-            ("包含血腥", "血腥内容",
-             "含血腥描述 → 改为抽象表述"),
-            # Generic failure
-            ("生成失败，请稍后重试", "生成失败",
-             "豆包返回生成失败 → 缩短prompt或减少参考图"),
-        ]
-
+        """Check page text for Doubao moderation/rejection signals."""
         body = body_text or ""
-        for keyword, reason, suggestion in BLOCK_RULES:
+        for keyword, reason, suggestion in DoubaoBrowserClient._BLOCK_RULES:
+            if keyword in body:
+                return {"reason": reason, "suggestion": suggestion,
+                        "error": f"[审核拦截: {reason}] {suggestion}"}
+        return None
+
+    @staticmethod
+    def _check_hard_block(body_text: str) -> dict | None:
+        """Fast pre-grace-period check — only hard-block keywords."""
+        body = body_text or ""
+        for idx in DoubaoBrowserClient._HARD_BLOCK_INDICES:
+            keyword, reason, suggestion = DoubaoBrowserClient._BLOCK_RULES[idx]
             if keyword in body:
                 return {"reason": reason, "suggestion": suggestion,
                         "error": f"[审核拦截: {reason}] {suggestion}"}

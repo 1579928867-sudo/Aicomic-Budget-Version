@@ -27,6 +27,7 @@ def begin_agent_run(
     chapter_id: int,
     db: Any,
     extra_log: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> AgentResult | None:
     """Shared idempotency guard for all agents.
 
@@ -40,10 +41,13 @@ def begin_agent_run(
         chapter_id: Chapter being processed.
         db: Database instance.
         extra_log: Additional keys for the "started" log entry (e.g. {"script_id": 1}).
+        force: If True, clear any previous done/partial status and re-run unconditionally.
 
     Returns:
         AgentResult(status="skipped") if already done, None if should proceed.
     """
+    if force:
+        db.clear_agent_status(agent_name, chapter_id)
     status = db.get_agent_status(agent_name, chapter_id)
     if status == "done":
         db.log(agent_name, chapter_id, "skipped", {"reason": "already done"})

@@ -69,6 +69,101 @@ class Orchestrator:
                 count += 1
         return count
 
+    def _verify_shot_assets(self, chapter_id: int) -> tuple[bool, list[str]]:
+        """逐镜头检查视频生成所需的参考图是否全部就位。
+
+        Returns:
+            (ok, missing_items) — ok=True 表示可以安全进入视频阶段。
+            missing_items 是缺失项的可读列表。
+        """
+        import os as _os
+        import json as _json
+
+        missing: list[str] = []
+        shots = self.db.conn.execute("""
+            SELECT ss.id, ss.shot_num, ss.char_ids, ss.scene_id,
+                   sc.name AS scene_name, sc.multi_view_image
+            FROM storyboard_shot ss
+            JOIN script s ON s.id = ss.script_id
+            LEFT JOIN scene_card sc ON sc.id = ss.scene_id
+            WHERE s.chapter_id = ?
+            ORDER BY ss.shot_num
+        """, (chapter_id,)).fetchall()
+
+        if not shots:
+            return False, ["尚未生成分镜 — 请先运行「剧本与设计」阶段"]
+
+        for shot in shots:
+            shot_id = shot["id"]
+            shot_num = shot["shot_num"]
+            scene_name = shot["scene_name"] or f"场景#{shot['scene_id']}"
+
+            # ── 1. 场景多景别图 ──
+            scene_img = shot["multi_view_image"]
+            if not scene_img or not _os.path.exists(scene_img):
+                missing.append(
+                    f"镜头{shot_num}: 场景「{scene_name}」缺少多景别参考图"
+                )
+
+            # ── 2. 角色设定图 ──
+            outfit_rows = self.db.conn.execute("""
+                SELECT cc.name, co.image_path,
+                       COALESCE(co.tag, '默认') AS tag
+                FROM shot_character_outfit sco
+                JOIN character_card cc ON cc.id = sco.character_id
+                LEFT JOIN character_outfit co ON co.character_id = sco.character_id
+                    AND co.tag = COALESCE(sco.outfit_tag, '默认')
+                WHERE sco.shot_id = ?
+            """, (shot_id,)).fetchall()
+
+            # Fallback for pre-junction data
+            if not outfit_rows:
+                try:
+                    char_ids = _json.loads(shot["char_ids"] or "[]")
+                except (_json.JSONDecodeError, TypeError):
+                    char_ids = []
+                for cid in char_ids:
+                    row = self.db.conn.execute("""
+                        SELECT cc.name, co.image_path,
+                               COALESCE(co.tag, '默认') AS tag
+                        FROM character_card cc
+                        LEFT JOIN character_outfit co ON co.character_id = cc.id
+                        WHERE cc.id = ?
+                        ORDER BY co.id DESC LIMIT 1
+                    """, (cid,)).fetchone()
+                    if row:
+                        outfit_rows.append(row)
+
+            for orow in outfit_rows:
+                img_path = orow["image_path"]
+                if not img_path or not _os.path.exists(img_path):
+                    missing.append(
+                        f"镜头{shot_num}: 角色「{orow['name']}」缺少 "
+                        f"{orow['tag']} 设定图"
+                    )
+
+        return (len(missing) == 0, missing)
+
+    def _missing_clip_shots(self, script_id: int) -> list[int]:
+        """Return shot numbers that don't have any video clips yet.
+
+        Query: find all storyboard_shot rows for this script, then exclude
+        those that appear in video_clip joined through storyboard_shot.
+        """
+        all_shots = self.db.conn.execute(
+            "SELECT shot_num FROM storyboard_shot WHERE script_id = ? ORDER BY shot_num",
+            (script_id,),
+        ).fetchall()
+        existing = set(
+            r[0] for r in self.db.conn.execute(
+                """SELECT ss.shot_num FROM video_clip vc
+                   JOIN storyboard_shot ss ON vc.shot_id = ss.id
+                   WHERE ss.script_id = ?""",
+                (script_id,),
+            ).fetchall()
+        )
+        return [s["shot_num"] for s in all_shots if s["shot_num"] not in existing]
+
     def _resolve_script_id(self, chapter_id: int) -> int | None:
         """Get the latest script_id for a chapter from the DB.
 
@@ -94,13 +189,58 @@ class Orchestrator:
         beats = raw.get("beats", [])
         return chars, scenes, len(beats)
 
+    def _check_phase(self, stop_after: str | None, agent_name: str,
+                     chapter_id: int, script_id: int | None,
+                     summary: dict) -> AgentResult | None:
+        """If stop_after matches, return a phase-complete result instead of continuing."""
+        if stop_after and stop_after == agent_name:
+            return AgentResult(
+                success=True,
+                data={
+                    "chapter_id": chapter_id,
+                    "script_id": script_id,
+                    "phase": f"stopped_at_{agent_name}",
+                    "completed_agent": agent_name,
+                    "summary": summary,
+                },
+            )
+        return None
+
     def run_chapter(
         self, chapter_id: int, raw_text: str,
         with_video: bool = False,
         with_images: bool = False,
+        stop_after: str | None = None,
+        max_video_clips: int = 3,
     ) -> AgentResult:
-        """Run the full pipeline for a single chapter."""
+        """Run the full pipeline for a single chapter.
+
+        If stop_after is set (agent name), the pipeline stops after completing
+        that agent and returns with success + data.phase='stopped_at_{agent}'.
+        This enables interactive phase-by-phase execution from the web UI.
+
+        max_video_clips: max clips per batch for shot-video-generator.
+            0 = unlimited. Default 3 (free doubao daily quota).
+        """
+        # Fix Windows GBK encoding for emoji in print() calls
+        import sys as _sys
+        if _sys.platform == "win32":
+            try:
+                _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
         self.db.log("orchestrator", chapter_id, "pipeline_started")
+
+        # ── Auto-load raw_text from DB if caller passed empty string ──
+        if not raw_text.strip():
+            row = self.db.conn.execute(
+                "SELECT raw_text FROM chapter WHERE id = ?", (chapter_id,)
+            ).fetchone()
+            if row and row["raw_text"]:
+                raw_text = row["raw_text"]
+            else:
+                return AgentResult(success=False, error=f"Chapter {chapter_id} has no text — please upload the chapter file first")
 
         # ── Resume detection ──
         AGENTS_IN_ORDER = [
@@ -259,8 +399,53 @@ class Orchestrator:
             )
             return storyboard_result
 
-        shots_created = storyboard_result.data.get("shots_created", 0) if storyboard_result.data else 0
+        shots_created = storyboard_result.data.get("shots_created", 0) if (storyboard_result.data and storyboard_result.data.get("shots_created") is not None) else 0
+        # 如果 agent 被跳过 (idempotent), data 里没有 shots_created → 从 DB 查
+        if shots_created == 0:
+            row = self.db.conn.execute(
+                "SELECT COUNT(*) as c FROM storyboard_shot WHERE script_id = ?", (script_id,)
+            ).fetchone()
+            shots_created = row["c"] if row else 0
         print(f"  ✓ Storyboard Agent: {shots_created} 镜头 (合并后)")
+
+        # ── Phase checkpoint: script/design complete ──
+        phase_result = self._check_phase(stop_after, "storyboard-agent", chapter_id, script_id,
+                                          {"characters": len(characters), "scenes": len(scenes_list),
+                                           "shots": shots_created})
+        if phase_result: return phase_result
+
+        # ── Backfill: storyboard may have created scene entries for scenes
+        #     not in the original scenes_list. Run scene designer on any scene
+        #     that still has an empty multi_view_prompt. ──
+        if raw_text:
+            promptless = self.db.conn.execute(
+                """SELECT sc.name FROM scene_card sc
+                   JOIN storyboard_shot ss ON ss.scene_id = sc.id
+                   JOIN script s ON s.id = ss.script_id
+                   WHERE s.chapter_id = ? AND (sc.multi_view_prompt = '' OR sc.multi_view_prompt IS NULL)
+                   GROUP BY sc.id""",
+                (chapter_id,),
+            ).fetchall()
+            if promptless:
+                missing_names = [r["name"] for r in promptless]
+                print(f"  🔧 补填 {len(missing_names)} 个缺失的场景提示词: {missing_names}")
+                try:
+                    backfill_result = self.bus.run(
+                        "scene-designer",
+                        {
+                            "chapter_id": chapter_id,
+                            "raw_text": raw_text,
+                            "scenes_list": missing_names,
+                            "script_id": script_id,
+                        },
+                        self.db,
+                    )
+                    if backfill_result.success:
+                        print(f"  ✓ 场景提示词补填完成")
+                    else:
+                        print(f"  ⚠ 场景提示词补填失败: {backfill_result.error}")
+                except Exception as e:
+                    print(f"  ⚠ 场景提示词补填异常: {e}")
 
         # ── Step 6: Image Generator (optional) ──
         img_result = None
@@ -337,32 +522,89 @@ class Orchestrator:
         shots_vis = shot_vis_result.data.get("shots_processed", 0) if shot_vis_result.data else 0
         print(f"  ✓ Shot Visualizer: {shots_vis} 镜头已生成分镜提示词")
 
+        # ── Phase checkpoint: image generation complete ──
+        phase_result = self._check_phase(stop_after, "shot-visualizer", chapter_id, script_id,
+                                          {"shots_visualized": shots_vis,
+                                           "images_generated": (img_result.data or {}).get("images_generated", 0) if img_result else 0})
+        if phase_result: return phase_result
+
         # ── Step 8: Shot Video Generator (optional) ──
         shot_video_result = None
         if with_video and script_id:
+            # ── 素材完整性预检：逐一核实每个分镜的场景图+角色图 ──
+            assets_ok, assets_missing = self._verify_shot_assets(chapter_id)
+            if not assets_ok:
+                missing_detail = "；".join(assets_missing)
+                msg = (
+                    f"视频生成入口检查失败：{len(assets_missing)} 项素材缺失，"
+                    f"请重新运行图片生成阶段补全。缺失：{missing_detail}"
+                )
+                print(f"  🛑 {msg}")
+                self.db.log(
+                    "orchestrator", chapter_id, "pipeline_aborted",
+                    {"reason": "video_preflight_missing_assets",
+                     "missing_count": len(assets_missing),
+                     "missing_detail": assets_missing},
+                    level="ERROR",
+                )
+                return AgentResult(success=False, error=msg)
+
+            print(f"  ▶ Shot Video Generator: starting for script {script_id}... "
+                  f"(max {max_video_clips} clips/batch)" if max_video_clips > 0 else "(unlimited)")
             shot_video_result = self.bus.run(
                 "shot-video-generator",
-                {"chapter_id": chapter_id, "script_id": script_id},
+                {
+                    "chapter_id": chapter_id,
+                    "script_id": script_id,
+                    "max_clips_per_run": max_video_clips,
+                },
                 self.db,
             )
             if shot_video_result.success:
-                sc = shot_video_result.data.get("clips_created", 0) if shot_video_result.data else 0
-                st = shot_video_result.data.get("total_shots", 0) if shot_video_result.data else 0
-                fc = shot_video_result.data.get("failed_count", 0) if shot_video_result.data else 0
+                sd = shot_video_result.data or {}
+                sc = sd.get("clips_created", 0)
+                st = sd.get("total_shots", 0)
+                fc = sd.get("failed_count", 0)
                 if sc > 0 and fc > 0:
-                    print(f"  ⚡ Shot Video Generator: {sc}/{st} 成功, {fc} 失败 (可续跑)")
+                    # Detect which shot numbers are missing clips
+                    failed_nums = self._missing_clip_shots(script_id)
+                    failed_detail = ", ".join(f"镜头{n}" for n in failed_nums) if failed_nums else f"{fc}个"
+                    sd["failed_shot_nums"] = failed_nums
+                    sd["warning"] = f"{sc}/{st} 分镜视频成功，{failed_detail}未生成。请先解决失败的分镜后再合成视频。"
+                    print(f"  ⚡ Shot Video Generator: {sc}/{st} 成功, {fc} 失败 ({failed_detail}, 可续跑)")
                 elif sc > 0:
                     print(f"  ✓ Shot Video Generator: {sc}/{st} 视频片段")
-                elif shot_video_result.data.get("skipped_all"):
+                elif sd.get("skipped_all"):
                     print(f"  ⏭ Shot Video Generator: 全部已生成，跳过")
                 else:
                     print(f"  ⚠ Shot Video Generator: 0/{st} 成功")
             else:
                 err = shot_video_result.error or "未知错误"
                 if "not registered" in err:
-                    print(f"  ⏭ Shot Video Generator: 未注册，跳过")
+                    self.db.log("orchestrator", chapter_id, "pipeline_failed",
+                        {"failed_at": "shot-video-generator", "error": f"Agent未注册: {err}"}, level="ERROR")
+                    return AgentResult(success=False, error=f"视频生成Agent未注册，请检查config/settings.yaml中video.generator配置")
                 else:
-                    print(f"  ✗ Shot Video Generator: 失败 — {err}")
+                    self.db.log("orchestrator", chapter_id, "pipeline_failed",
+                        {"failed_at": "shot-video-generator", "error": err}, level="ERROR")
+                    return AgentResult(success=False, error=f"视频生成失败: {err}")
+            # If with_video but 0 clips produced, also fail (unless explicitly skipped or budget_paused)
+            # (sd is already defined above from shot_video_result.data)
+            if shot_video_result.success and sd.get("clips_created", 0) == 0 \
+               and not sd.get("skipped_all") and sd.get("status") != "budget_paused":
+                shots_count = len(self.db.conn.execute(
+                    "SELECT id FROM storyboard_shot WHERE script_id = ?", (script_id,)
+                ).fetchall())
+                self.db.log("orchestrator", chapter_id, "pipeline_failed",
+                    {"failed_at": "shot-video-generator", "error": "0 clips generated", "shots": shots_count}, level="ERROR")
+                return AgentResult(success=False,
+                    error=f"视频生成失败: 0/{shots_count} 个分镜视频生成成功。请检查豆包 Cookie 是否有效，或查看任务日志了解详情。")
+
+            # ── Budget checkpoint: shot-video-generator stopped by clip limit ──
+            if shot_video_result.success and sd.get("status") == "budget_paused":
+                print(f"  ⏸ Video phase paused by budget: {sd.get('clips_created')}/{sd.get('total_shots')} clips, {sd.get('remaining_shots', '?')} remaining")
+                self.db.log("orchestrator", chapter_id, "video_budget_paused",
+                    {"clips_created": sd.get("clips_created"), "remaining": sd.get("remaining_shots")})
 
         # ── Step 9: Video Generator (legacy) ──
         video_result = None
@@ -386,14 +628,30 @@ class Orchestrator:
 
         # ── Step 10: Video Composer (optional) ──
         composer_result = None
+        composer_skipped_reason = None
         if with_video and script_id:
             clips_exist = bool(
                 shot_video_result and shot_video_result.success
                 and shot_video_result.data
                 and shot_video_result.data.get("clips_created", 0) > 0
             )
+            has_failures = bool(
+                shot_video_result and shot_video_result.data
+                and shot_video_result.data.get("failed_count", 0) > 0
+            )
             legacy_ok = video_result and video_result.success
-            if clips_exist or legacy_ok:
+            if has_failures and clips_exist:
+                # ── Partial success: warn user, don't auto-compose ──
+                failed_nums = (shot_video_result.data or {}).get("failed_shot_nums", [])
+                failed_detail = ", ".join(f"镜头{n}" for n in failed_nums) if failed_nums else "部分"
+                composer_skipped_reason = (
+                    f"⚠ 跳过视频合成：{failed_detail}未生成。"
+                    f"解决失败的分镜后可再次运行视频阶段完成合成。"
+                )
+                print(f"  {composer_skipped_reason}")
+                self.db.log("orchestrator", chapter_id, "composer_skipped",
+                    {"reason": "partial_clips", "failed_shots": failed_nums}, level="WARNING")
+            elif clips_exist or legacy_ok:
                 composer_result = self.bus.run(
                     "video-composer",
                     {"chapter_id": chapter_id, "script_id": script_id},
@@ -406,6 +664,12 @@ class Orchestrator:
                         level="ERROR",
                     )
 
+        sv_data = (shot_video_result.data or {}) if (shot_video_result and shot_video_result.success) else {}
+        sv_clips = sv_data.get("clips_created", 0)
+        sv_failed = sv_data.get("failed_count", 0)
+        sv_warning = sv_data.get("warning", "")
+        sv_failed_nums = sv_data.get("failed_shot_nums", [])
+
         self.db.log(
             "orchestrator", chapter_id, "pipeline_completed",
             {
@@ -417,6 +681,9 @@ class Orchestrator:
                 "storyboard_agent": "ok" if storyboard_result.success else "failed",
                 "image_generator": "ok" if (img_result and img_result.success) else "skipped",
                 "shot_visualizer": "ok" if shot_vis_result.success else "failed",
+                "video_clips_created": sv_clips,
+                "video_clips_failed": sv_failed,
+                "video_composer_skipped": composer_skipped_reason,
             },
         )
 
@@ -434,12 +701,16 @@ class Orchestrator:
                 "images_generated": img_result.data.get("images_generated", 0) if (img_result and img_result.data) else 0,
                 "shots_visualized": shots_vis,
                 "clips_created": (
-                    shot_video_result.data.get("clips_created", 0)
-                    if (shot_video_result and shot_video_result.success and shot_video_result.data)
-                    else video_result.data.get("clips_created", 0)
-                    if (video_result and video_result.success and video_result.data)
-                    else 0
+                    sv_clips
+                    or (video_result.data.get("clips_created", 0) if (video_result and video_result.success and video_result.data) else 0)
                 ),
+                "clips_failed": sv_failed,
+                "failed_shot_nums": sv_failed_nums,
+                "video_warning": sv_warning or composer_skipped_reason or "",
                 "final_video_path": composer_result.data.get("final_video_path") if (composer_result and composer_result.data) else None,
+                "budget_paused": sv_data.get("status") == "budget_paused",
+                "budget_remaining": sv_data.get("remaining_shots", 0),
+                "budget_per_run": sv_data.get("budget_per_run", 3),
+                "budget_message": sv_data.get("message", ""),
             },
         )

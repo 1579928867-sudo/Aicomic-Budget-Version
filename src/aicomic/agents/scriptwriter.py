@@ -85,6 +85,14 @@ RIGHT (one complete video-native beat):
 
 18. **atmosphere**: Overall mood, lighting, color temperature, spatial feel of the scene. Be SPECIFIC — "苍翠碧绿的空间，荧光粒子漂浮，空旷无垠" not "绿色空间".
 19. **scene_sound_cues**: Background ambient sounds that persist throughout the scene.
+20. **crowd_density** (scene-level, MANDATORY): Analyze the original text for each scene — read descriptions of the environment's human presence. Tag with one of:
+    - `"empty"` — 私有/荒凉/封闭空间，无他人 (empty/private/secluded)
+    - `"sparse"` — 零星的，几人路过 (a few passersby)
+    - `"moderate"` — 人来人往的，自然地 (natural foot traffic)
+    - `"busy"` — 热闹的，人群密集 (lively crowds)
+    - `"packed"` — 水泄不通的，摩肩接踵 (densely packed, shoulder to shoulder)
+    Base this on the ORIGINAL TEXT — if the novel says "人来人往的集市", tag `"busy"`.
+21. **crowd_density** (beat-level, MANDATORY): Each BEAT also gets its own crowd_density tag. This reflects the crowd density during THIS specific beat's action, which may differ from the scene's default. Use the same 5 levels.
 
 ## Output Format
 
@@ -98,17 +106,17 @@ Return ONLY valid JSON in this exact structure (no other text):
       "scene_index": 1,
       "atmosphere": "清晨暖光透过雕花窗棂洒入，红色帷帐飘动，喜庆中带着昏沉，暖黄色调",
       "scene_sound_cues": ["远处隐约鸟鸣", "红色帷帐微微飘动的沙沙声"],
+      "crowd_density": "empty",
       "beats": [
         {
           "beat_num": 1,
           "characters": ["萧澈"],
-          "action": "萧澈从昏迷中苏醒，缓缓睁开眼。他发现自己躺在挂着红色幔帐的婚床上，神色从茫然转为警觉，快速坐起身环顾四周房间——暖黄晨光透过雕花窗棂洒入，红色帷帐飘动，喜庆布置中带着陌生感。",
+          "action": "...",
           "visual_fx": null,
-          "dialogue": [
-            {"speaker": "萧澈（内心）", "line": "怎么回事……难道我还没有死？我明明坠下了绝云崖，怎么可能还活着！", "emotion": "困惑、震惊"}
-          ],
-          "expressions": {"萧澈": "苏醒时眼神迷茫，坐起后转为警觉，快速扫视房间，眉头微皱"},
-          "sound_cue": "床铺轻微吱呀声，身体快速坐起的衣物摩擦声"
+          "dialogue": [...],
+          "expressions": {...},
+          "sound_cue": "...",
+          "crowd_density": "empty"
         }
       ]
     }
@@ -126,7 +134,9 @@ Return ONLY valid JSON in this exact structure (no other text):
 - **dialogue**: Array of objects. Each: speaker (str), line (str — EXACT original text), emotion (str).
 - **expressions**: Object mapping character name → expression string. EVERY character in the beat must appear as a key. Include emotional transitions.
 - **sound_cue**: String. One per beat. Specific and atmospheric.
-- **characters** (top-level): Array of ALL unique character names in the entire chapter.
+- **crowd_density** (scene-level): One of: "empty" | "sparse" | "moderate" | "busy" | "packed". Analyzed from the original text's environment descriptions.
+- **crowd_density** (beat-level): One of: "empty" | "sparse" | "moderate" | "busy" | "packed". Crowd density during THIS beat — a quiet moment in a busy market is "sparse", a rush-hour surge is "packed".
+- **characters** (top-level): Array of ALL unique character names in the entire chapter. **IMPORTANT: If a character appears at a significantly different age (e.g., child/young version, old version), list them as a SEPARATE entry with the age suffix — e.g., ["萧澈", "萧澈（年幼）", "小姑妈"]. The age variant needs its own character design sheet.** Children and elderly characters MUST be listed as distinct entries.
 - **scenes_list**: Array of ALL distinct scene/location names in first-appearance order.
 
 ## What NOT to do
@@ -183,7 +193,7 @@ class ScriptwriterAgent(AgentInterface):
                     "4) 目标 8-12 个 beat\n\n"
                     f"{raw_text}"
                 ),
-                max_tokens=16384,
+                max_tokens=8192,
             )
 
             self._validate_script(script_json)

@@ -25,8 +25,14 @@ class DeepSeekClient:
         api_key: str,
         model: str = "deepseek-chat",
         base_url: str = "https://api.deepseek.com",
+        timeout: float = 120.0,
     ):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=1,
+        )
         self.model = model
 
     def generate_json(

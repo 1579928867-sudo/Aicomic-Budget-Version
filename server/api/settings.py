@@ -268,7 +268,7 @@ def set_llm_config(body: LLMBody):
     config = load_config()
     config["backend"] = body.backend
     if body.backend not in config: config[body.backend] = {}
-    if body.api_key: config[body.backend]["api_key"] = body.api_key
+    if body.api_key: config[body.backend]["api_key"] = body.api_key.strip()
     if body.model: config[body.backend]["model"] = body.model
     if body.base_url: config[body.backend]["base_url"] = body.base_url
     save_config(config)

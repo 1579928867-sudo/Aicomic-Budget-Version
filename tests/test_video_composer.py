@@ -109,7 +109,8 @@ def test_execute_success():
             shutil.rmtree(clip_dir, ignore_errors=True)
 
 
-def test_execute_skips_when_already_done():
+def test_execute_reruns_when_called_again():
+    """v0.17: video-composer always re-runs - no idempotency skip."""
     db, db_path = _make_db()
     clip_dir = None
     try:
@@ -122,13 +123,15 @@ def test_execute_skips_when_already_done():
             db,
         )
         assert result1.success is True
+        assert result1.data.get("clip_count") == 2
 
+        # Second call should also succeed and produce real data
         result2 = agent.execute(
             {"chapter_id": chapter_id, "script_id": script_id},
             db,
         )
         assert result2.success is True
-        assert result2.data.get("status") == "skipped"
+        assert result2.data.get("clip_count") == 2
     finally:
         db.close()
         db_path.unlink()

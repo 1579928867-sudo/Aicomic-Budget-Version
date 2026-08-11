@@ -2,7 +2,7 @@
 
 v0.10: Refactored from "novel→storyboard" to "script→storyboard".
 Takes a ScriptwriterAgent output (script with beats, dialogue, expressions,
-sound cues) and designs merged camera shots (10s each, 8-12 total).
+sound cues) and designs merged camera shots (10s each, 8-15 total).
 """
 
 import json
@@ -17,13 +17,23 @@ STORYBOARD_SYSTEM_PROMPT = """你是专业的漫剧分镜导演，输入是视�
 
 豆包视频模型对长篇叙事+连续对白+多角色固定人设的组合审核严格。记住：视频模型只能生成"镜头能拍到的画面"，不能拍内心活动、抽象概念或长篇叙事。每个 segment 只描述一个清晰可见的画面动作。
 
-## 镜头数量与节奏（v0.15 调整）
+## scene_name 铁律（必须逐字照抄！）
 
-- 总镜头数 8-12 个，不要为了节省镜头而压缩重要场景
+**`scene_name` 必须严格使用输入 beat 所属场景的原名，一个字都不许改！**
+- 输入里写"婚房" → 你输出"婚房"，不许写成"婚房""婚房内""婚房—白天"
+- 输入里写"小镇街道" → 你输出"小镇街道"，不许添加后缀或描述
+- scene 名称是数据库主键，改名会导致场景卡片孤岛、参考图丢失
+- **每个 shot 的 `scene_name` 必须与其所属 beat 的场景名逐字一致**
+
+## 镜头数量与节奏（v0.15 调整 → v0.5 强化）
+
+- 总镜头数 8-15 个，不要为了节省镜头而压缩重要场景
 - 1 beat ≠ 必须 1 shot。遇到以下情况，1 个 beat 拆成 2 个镜头：
   - 战斗/死亡/牺牲等动作密集场景（需要展示对决→落败→结局的完整过程）
   - 重要的回忆/闪回片段（需要给观众时间进入情境）
   - 情绪高潮场景（需要铺陈→爆发→余韵的三段式节奏）
+  - **多角色对话场景（2+ 个角色在同一个 beat 内交替说话）——视频模型无法在 10 秒内准确区分多人轮流说话，必须拆分为每人一个镜头**
+- **多角色对话强制拆分规则**：如果 1 个 beat 有 ≥2 个角色各有台词，必须拆成 2 个 shot，每个 shot 只突出 1 个说话角色，用另一个 shot 展示听者反应
 - 每个镜头仍保持 10s，用镜头数量换叙事空间，而不是压缩内容
 - 日常对话/过渡场景继续 1 beat = 1 shot，把镜头数留给重要场景
 
@@ -112,7 +122,7 @@ segment 3 的 transition 是上一个镜头和下一个镜头之间的桥梁。�
 {
   "scenes": [
     {
-      "scene_name": "婚房·清晨",
+      "scene_name": "婚房",
       "scene_index": 1,
       "shots": [
         {
@@ -120,7 +130,7 @@ segment 3 的 transition 是上一个镜头和下一个镜头之间的桥梁。�
           "shot_type": "both",
           "duration_sec": 10.0,
           "characters": [{"name": "萧澈", "variant": "default"}],
-          "scene_name": "婚房·清晨",
+          "scene_name": "婚房",
           "segments": [
             {
               "time_range": "0-3秒",
@@ -153,13 +163,46 @@ segment 3 的 transition 是上一个镜头和下一个镜头之间的桥梁。�
     }
   ],
   "characters": ["萧澈"],
-  "scenes_list": ["婚房·清晨"]
+  "scenes_list": ["婚房"]
 }
 
-## 重点禁止
+## 多人场景动作铁律——防角色混淆与肢体误解
+
+豆包视频模型在多人场景下容易产生"角色错位"和"非意愿肢体接触"，以下规则强制执行：
+
+**0. 多人对话必须拆分镜头（最优先规则）**
+- 如果 1 个 beat 中有 ≥2 个角色各有台词，必须拆分为 2 个 shot
+- Shot A: 角色 A 说话（action 聚焦 A 的口型+表情），角色 B 仅作为听者出现在画面中
+- Shot B: 角色 B 说话/回应（action 聚焦 B 的口型+表情），角色 A 作为听者
+- 每个 shot 的 segment 1 dialogue 标注当前说话人，segment 2-3 可以切换或无对话
+- 这样视频模型每次只需生成"一个人说话"的画面，避免台词与人嘴型错配
+
+**1. 动词必须带宾语，主语必须明确**
+- Non: "许川张开胳膊，朝向妇女" → 模型理解为"抱住了她"
+- Oui: "许川朝中年妇女的方向微微抬手示意，保持一米距离，脸部挂着邀请的表情。妇女站在原地笑着摆手回应。"
+- 规则：每个 segment 中每个有名字的角色，action 必须以「角色名 + 动词 + 宾语/身体部位」格式写出完整画面
+
+**2. 没有肢体接触就必须写"未触碰"**
+- 除非剧本原文明确写了拥抱/搀扶/牵手/推搡，否则在 action 末尾加"保持距离"或"未接触"
+- 特例：只有"蹲下身轻轻拥抱小女孩"是明确的拥抱动作——这里不能加"未触碰"
+
+**3. 角色身份必须与动作匹配**
+- 先明确角色在剧情中的身份（家长、路人、顾客、士兵），然后只写这个身份会做的动作
+- 中年妇女问"我也可以吗？"——她是一名好奇的路人，站在一米外笑着问，不是被抱的对象
+- 家长蹲下看孩子、扫码付款——不会突然跑到另一个角色怀里
+
+**4. 不同性别角色之间禁止暧昧歧义**
+- 非亲密关系的男女角色之间，action 必须写明空间距离："站在一米外"、"隔着桌子"、"从侧面走过来停在三步远"
+- 禁止任何可能被视频模型误解为拥抱/亲吻/靠近的身体语言
+
+**5. 孩子角色必须视觉可辨**
+- 如果剧本中出现了"小女孩""小孩"等未成年角色，相关 segment 的 action 必须含有【小孩】标记，如：
+- "许川单膝蹲下【小孩在膝前】，温柔张开双臂，轻轻拥抱穿粉色连衣裙的四五岁小女孩。"
+- 不要在同一个 shot 里让小孩和其他成人角色做同一套动作描述——小孩动线独立写
 
 - 不要压缩重要场景——战斗、死亡、回忆、情绪高潮必须拆成 2 个镜头
-- 日常对话场景保持 1 beat = 1 shot，总镜头数控制在 8-12 个
+- 多角色对话场景（≥2人各有台词）必须拆成 2 个镜头，每个镜头只聚焦 1 个说话人
+- 日常对话场景保持 1 beat = 1 shot，总镜头数控制在 8-15 个
 - 不要跳过 segments —— 每个 shot 必须恰好 3 个 segment
 - 对话不要缩写或改写 —— 忠实原文，但长对白必须拆分到多个 segment
 - 音色不要遗漏 —— 每个有台词的 segment 必须带音色
@@ -222,6 +265,9 @@ class ScreenwriterAgent(AgentInterface):
 
             # ── Validate structure ──
             self._validate_storyboard(storyboard_json)
+
+            # ── Normalize scene names to match script input exactly ──
+            storyboard_json = self._normalize_scene_names(storyboard_json, script_json)
 
             # ── Register characters (may already exist, idempotent) ──
             char_name_to_id: dict[str, int] = {}
@@ -291,6 +337,72 @@ class ScreenwriterAgent(AgentInterface):
             )
             return AgentResult(success=False, error=str(e))
 
+    @staticmethod
+    def _normalize_scene_names(storyboard_json: dict, script_json: dict) -> dict:
+        """Force scene names to match the script input exactly.
+
+        The LLM sometimes renames scenes (e.g. "婚房" → "婚房·清晨"),
+        which creates orphan scene_card entries with no prompt. This method
+        normalizes all scene names back to the canonical input names.
+
+        Matching strategy:
+        1. Exact match — no action needed.
+        2. Canonical name is a prefix of the LLM's name (e.g. "婚房" ⊆ "婚房·清晨") — remap.
+        3. Canonical name is a substring — remap with warning.
+        4. No match at all — keep as-is (truly new scene), log warning.
+        """
+        canonical_names: list[str] = []
+        for scene in script_json.get("scenes", []):
+            sn = scene.get("scene_name", "").strip()
+            if sn:
+                canonical_names.append(sn)
+
+        if not canonical_names:
+            return storyboard_json
+
+        llm_scenes_list = storyboard_json.get("scenes_list", [])
+
+        # Build remapping dict: LLM name → canonical name
+        remap: dict[str, str] = {}
+        for llm_name in llm_scenes_list:
+            if llm_name in canonical_names:
+                continue  # exact match
+            matched = None
+            for cn in canonical_names:
+                if llm_name.startswith(cn):
+                    matched = cn
+                    break
+            if not matched:
+                for cn in canonical_names:
+                    if cn in llm_name:
+                        matched = cn
+                        break
+            if matched:
+                remap[llm_name] = matched
+                print(f"  🔧 场景名纠正: 「{llm_name}」→「{matched}」")
+            else:
+                print(f"  ⚠ 分镜包含未知场景: 「{llm_name}」（不在脚本场景列表中）")
+
+        if not remap:
+            return storyboard_json
+
+        # Apply remapping to scenes_list
+        storyboard_json["scenes_list"] = [
+            remap.get(n, n) for n in llm_scenes_list
+        ]
+
+        # Apply remapping to each shot's scene_name
+        for scene in storyboard_json.get("scenes", []):
+            old = scene.get("scene_name", "")
+            if old in remap:
+                scene["scene_name"] = remap[old]
+            for shot in scene.get("shots", []):
+                sname = shot.get("scene_name", "")
+                if sname in remap:
+                    shot["scene_name"] = remap[sname]
+
+        return storyboard_json
+
     def _build_user_prompt(self, script_json: dict) -> str:
         """Build the LLM user prompt from script beats."""
         parts = []
@@ -336,7 +448,8 @@ class ScreenwriterAgent(AgentInterface):
                     parts.append(f"    🔊 {sound}")
 
         parts.append(
-            f"\n将以上 {total_beats} 个 Beat 一一对应翻译为 {total_beats} 个分镜镜头。"
+            f"\n将以上 {total_beats} 个 Beat 翻译为分镜镜头（8-15 个）。"
+            f"遇到多角色对话（≥2人各有台词）、战斗/死亡/回忆/情绪高潮场景必须拆成 2 个镜头。"
             f"每个镜头的 10 秒拆分为 3 个时间段([0-3秒][3-7秒][7-10秒])，"
             f"每段包含景别运镜、画面描述、台词音效。"
             f"每个有台词的角色必须指定音色并在全剧保持一致。"
@@ -354,14 +467,29 @@ class ScreenwriterAgent(AgentInterface):
                 raise ValueError(f"Storyboard JSON missing '{field}'")
 
         valid_shot_types = {"action", "dialogue", "both"}
+        # LLM 偶尔会输出 flashback/monologue 等非标准值 → 自动修正而非报错
+        _shot_type_alias = {
+            "flashback": "both",      # 回忆/闪回镜头 → 动作+对话
+            "monologue": "dialogue",  # 独白/内心独白 → 对话
+            "narration": "action",    # 旁白 → 动作（必须视觉化）
+            "transition": "action",   # 转场 → 动作
+            "cutaway": "action",      # 切出 → 动作
+            "reaction": "action",     # 反应 → 动作
+        }
 
         for scene in script.get("scenes", []):
             for shot in scene.get("shots", []):
                 st = shot.get("shot_type", "")
                 if st not in valid_shot_types:
-                    raise ValueError(
-                        f"Invalid shot_type '{st}' in shot {shot.get('shot_num', '?')}"
-                    )
+                    corrected = _shot_type_alias.get(st)
+                    if corrected:
+                        shot["shot_type"] = corrected
+                        print(f"  ℹ 自动修正: shot_type '{st}' → '{corrected}' "
+                              f"(镜头 {shot.get('shot_num', '?')})")
+                    else:
+                        raise ValueError(
+                            f"Invalid shot_type '{st}' in shot {shot.get('shot_num', '?')}"
+                        )
                 dur = shot.get("duration_sec", 0)
                 if dur < 7.0 or dur > 10.0:
                     raise ValueError(

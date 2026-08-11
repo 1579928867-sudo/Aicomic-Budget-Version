@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import * as THREE from 'three';
 import { ArrowRight, Sparkles } from 'lucide-react';
-import { useAppStore } from '../stores/app';
 
 // ── 你的封面素材 (不够就循环) ──
 const COVER_IMAGES = [
@@ -71,7 +71,6 @@ function makeCardTexture(imgSrc: string): Promise<THREE.CanvasTexture> {
 
 export default function HomePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const setActivePage = useAppStore(s => s.setActivePage);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -199,7 +198,7 @@ export default function HomePage() {
 
       renderer.render(scene, camera);
     };
-    animate();
+    animate(0);
 
     return () => {
       cancelAnimationFrame(animId);
@@ -208,10 +207,6 @@ export default function HomePage() {
       scene.clear();
     };
   }, []);
-
-  const handleEnter = () => {
-    setActivePage('chat');
-  };
 
   return (
     <div style={{
@@ -258,8 +253,8 @@ export default function HomePage() {
       </div>
 
       {/* 3D CTA button */}
-      <button
-        onClick={handleEnter}
+      <Link
+        to="/chat"
         style={{
           position: 'relative', zIndex: 1,
           display: 'inline-flex', alignItems: 'center', gap: 12,
@@ -271,6 +266,7 @@ export default function HomePage() {
           color: '#fff',
           fontFamily: 'inherit', fontSize: 17, fontWeight: 700,
           cursor: 'pointer',
+          textDecoration: 'none',
           boxShadow: '0 8px 32px rgba(212,121,74,0.35), 0 2px 8px rgba(212,121,74,0.2)',
           transform: 'translateY(0)',
           transition: 'all 0.25s cubic-bezier(0.16,1,0.3,1)',
@@ -293,7 +289,7 @@ export default function HomePage() {
       >
         开始使用
         <ArrowRight size={20} />
-      </button>
+      </Link>
 
       {/* Style keyframes */}
       <style>{`

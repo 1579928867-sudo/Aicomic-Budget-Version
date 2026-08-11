@@ -7,7 +7,31 @@ build/
 .venv/
 .env
 data/
+config/settings.yaml
+scripts/
 test_output.txt
 .idea/
 node_modules/
 server/static/
+
+# 发布物（不在源码仓库，见 beta-pack/）
+aicomic-beta.zip
+beta-pack/
+
+# 独立学习项目（另有仓库）
+learn-tools/
+
+# 根目录临时/测试/参考文件
+test_chat.py
+导航栏背景参考.webp
+使用说明.md
+启动.bat
+
+# 测试用小说文件
+逆天邪神*.txt
+逆天邪神*.pdf
+
+# 提示词知识库数据（prompt_kb.py 运行时加载）
+
+# Superpowers / Claude 配置（个人）
+.superpowers/

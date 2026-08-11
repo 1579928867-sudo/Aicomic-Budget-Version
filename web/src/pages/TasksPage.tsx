@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ListTodo, Loader2, RefreshCw, XCircle, CheckCircle2, Clock, Play, StopCircle } from 'lucide-react';
+import { ListTodo, Loader2, RefreshCw, XCircle, CheckCircle2, Clock, Play, StopCircle, Trash2 } from 'lucide-react';
 import { tasks } from '../api';
 import type { Task } from '../types';
 
@@ -27,6 +27,17 @@ export function TasksPage() {
 
   const handleCancel = async (id: string) => { await tasks.cancel(id); fetchTasks(); };
   const handleRetry = async (id: string) => { await tasks.retry(id); fetchTasks(); };
+  const handleDelete = async (id: string) => {
+    await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
+    fetchTasks();
+  };
+  const handleClearCompleted = async () => {
+    const doneCount = taskList.filter(t => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled').length;
+    if (doneCount === 0) return;
+    if (!window.confirm(`确定删除全部 ${doneCount} 个已完成/失败的任务？此操作不可撤销。`)) return;
+    await fetch('/api/tasks', { method: 'DELETE' });
+    fetchTasks();
+  };
 
   const fmt = (ts: string) => new Date(ts + 'Z').toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -37,18 +48,44 @@ export function TasksPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>任务中心</h1>
           <p style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>监控和管理所有后台任务</p>
         </div>
-        <button
-          onClick={fetchTasks}
-          style={{
-            width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-tertiary)',
-            cursor: 'pointer', transition: 'all 0.15s',
-          }}
-          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text-tertiary)'; }}
-        >
-          <RefreshCw size={16} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={handleClearCompleted}
+            disabled={!taskList.some(t => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled')}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '7px 14px', borderRadius: 9,
+              border: '1px solid var(--border)', background: 'var(--surface)',
+              color: 'var(--text-tertiary)', fontFamily: 'inherit', fontSize: 12, fontWeight: 500,
+              cursor: 'pointer', transition: 'all 0.15s',
+              opacity: taskList.some(t => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled') ? 1 : 0.4,
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'var(--error-bg)';
+              e.currentTarget.style.color = 'var(--error)';
+              e.currentTarget.style.borderColor = 'var(--error)40';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'var(--surface)';
+              e.currentTarget.style.color = 'var(--text-tertiary)';
+              e.currentTarget.style.borderColor = 'var(--border)';
+            }}
+          >
+            <Trash2 size={13} /> 清空已完成
+          </button>
+          <button
+            onClick={fetchTasks}
+            style={{
+              width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text-tertiary)',
+              cursor: 'pointer', transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text-tertiary)'; }}
+          >
+            <RefreshCw size={16} />
+          </button>
+        </div>
       </div>
 
       {taskList.length === 0 ? (
@@ -113,6 +150,28 @@ export function TasksPage() {
                         fontFamily: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer', transition: 'all 0.12s',
                       }}>
                         <Play size={11} /> 重试
+                      </button>
+                    )}
+                    {(t.status === 'done' || t.status === 'failed' || t.status === 'cancelled') && (
+                      <button onClick={() => handleDelete(t.id)} style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 2, padding: '6px 10px',
+                        borderRadius: 8, border: '1px solid var(--border)',
+                        background: 'var(--surface)', color: 'var(--text-tertiary)',
+                        fontFamily: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer',
+                        transition: 'all 0.12s',
+                      }}
+                        onMouseEnter={e => {
+                          e.currentTarget.style.background = 'var(--error-bg)';
+                          e.currentTarget.style.color = 'var(--error)';
+                          e.currentTarget.style.borderColor = 'var(--error)40';
+                        }}
+                        onMouseLeave={e => {
+                          e.currentTarget.style.background = 'var(--surface)';
+                          e.currentTarget.style.color = 'var(--text-tertiary)';
+                          e.currentTarget.style.borderColor = 'var(--border)';
+                        }}
+                      >
+                        <Trash2 size={12} />
                       </button>
                     )}
                   </div>

@@ -15,9 +15,14 @@ class Database:
         self.conn: sqlite3.Connection | None = None
 
     def connect(self):
-        """Open connection with WAL mode and foreign keys enabled."""
+        """Open connection with WAL mode and foreign keys enabled.
+
+        check_same_thread=False is ESSENTIAL — the orchestrator is created on
+        the main thread during server startup but run_in_background() dispatches
+        its work to a ThreadPoolExecutor worker thread.
+        """
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
@@ -207,6 +212,10 @@ class Database:
             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
             "UNIQUE(character_id, tag)"
             ")",
+            # v0.16: file_size on final_video for empty-video detection
+            "ALTER TABLE final_video ADD COLUMN file_size INTEGER DEFAULT 0",
+            # v0.17: crowd_density on scene_card for background crowd generation
+            "ALTER TABLE scene_card ADD COLUMN crowd_density TEXT DEFAULT ''",
         ]
         for sql in migrations:
             try:
@@ -352,11 +361,12 @@ class Database:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def create_final_video(self, chapter_id: int, file_path: str) -> int:
+    def create_final_video(self, chapter_id: int, file_path: str,
+                           file_size: int = 0) -> int:
         """Create a final_video row. Returns the new final video id."""
         cursor = self.conn.execute(
-            "INSERT INTO final_video (chapter_id, file_path) VALUES (?, ?)",
-            (chapter_id, file_path),
+            "INSERT INTO final_video (chapter_id, file_path, file_size) VALUES (?, ?, ?)",
+            (chapter_id, file_path, file_size),
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -584,6 +594,15 @@ class Database:
                 chapter_id,
                 json.dumps({"status": status}, ensure_ascii=False),
             ),
+        )
+        self.conn.commit()
+
+    def clear_agent_status(self, agent_name: str, chapter_id: int):
+        """Delete all status records for an agent+chapter — allows re-run."""
+        self.conn.execute(
+            """DELETE FROM task_log
+               WHERE agent_name = ? AND chapter_id = ? AND event = 'status'""",
+            (agent_name, chapter_id),
         )
         self.conn.commit()
 

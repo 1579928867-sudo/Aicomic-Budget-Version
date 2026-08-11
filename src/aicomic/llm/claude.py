@@ -23,8 +23,13 @@ class ClaudeClient:
         self,
         api_key: str,
         model: str = "claude-sonnet-5-20251001",
+        timeout: float = 120.0,
     ):
-        self.client = Anthropic(api_key=api_key)
+        self.client = Anthropic(
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=1,
+        )
         self.model = model
 
     def generate_json(

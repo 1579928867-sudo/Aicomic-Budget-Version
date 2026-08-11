@@ -1,0 +1,23 @@
+# AI漫剧 Docker Compose
+# 使用:
+#   cp config/settings.example.yaml config/settings.yaml   # 填入 API Key
+#   docker compose up -d                                    # 启动
+
+services:
+  aicomic:
+    build: .
+    container_name: aicomic
+    ports:
+      - "8000:8000"
+    volumes:
+      # 配置文件持久化（settings.yaml 放这里）
+      - ./config:/app/config
+      # 数据持久化（数据库 + 生成的图片/视频）
+      - ./data:/app/data
+    environment:
+      # 禁用 uvicorn 热重载（Docker 中不需要）
+      - AICOMIC_RELOAD=0
+      # API Key — 也可在 config/settings.yaml 中配置
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    restart: unless-stopped

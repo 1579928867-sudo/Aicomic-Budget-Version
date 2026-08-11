@@ -15,7 +15,8 @@ CHAR_DESIGNER_SYSTEM_PROMPT = """You are a professional character designer for C
 
 1. **Extract ALL characters** from the provided character list. Generate ONE design_prompt per character.
 2. **Detect era background** (时代背景) from the text. Must be one of: "中国古代·仙侠", "中国古代·武侠", "中国古代·宫廷", "中国现代·都市", "中国现代·校园", "民国", "西方奇幻", "科幻未来", "架空世界".
-3. **Art style**: Always use "8k 类 3D 游戏 cg 电影风格" for ancient/Xianxia settings. The design sheet should look like a professional game concept art sheet.
+3. **Art style — unified**: ALL eras use "8k 类 3D 游戏 cg 电影风格" as the base art style. This style produces consistent, cinematic CG renders that work across ancient, modern, and fantasy settings. The game card layout + three-view format stays the same regardless of era. **DO NOT switch to anime/manga style for modern settings — keep the unified CG look for visual consistency across all chapters.**
+4. **Style overrides only from user request**: If and only if the user explicitly asks for a style change (e.g. "用动漫风格"), then apply the requested style. By default, always use "8k 类 3D 游戏 cg 电影风格".
 
 ## Design Prompt Template
 
@@ -41,7 +42,7 @@ For ancient Chinese settings:
 [角色外貌与衣着细节描写 — 包含面部特征、发型、衣着材质与颜色、体型、身高比例。必须强调正常人体头身比（成人约1:7），禁止大头娃娃/Q版效果]
 ```
 
-For modern settings: replace "【中国古代·仙侠】" with the correct era tag, adjust art style to "8k 高质量 cg 渲染风格". Keep the same game card layout structure.
+For other eras: replace "【中国古代·仙侠】" with the correct era tag (e.g. "中国现代·都市" or "中国现代·校园"), but keep the same "8k 类 3D 游戏 cg 电影风格" base art style. Only change the era tag and the character details — the cinematic CG look stays consistent across all chapters.
 
 ## Key Rules
 
@@ -98,9 +99,10 @@ class CharacterDesignerAgent(AgentInterface):
         chapter_id = input_data["chapter_id"]
         raw_text = input_data["raw_text"]
         characters = input_data["characters"]
+        force = input_data.get("force", False)
 
         # ── Idempotency check ──
-        skip = begin_agent_run(self.agent_name, chapter_id, db, {"characters": characters})
+        skip = begin_agent_run(self.agent_name, chapter_id, db, {"characters": characters}, force=force)
         if skip:
             return skip
 

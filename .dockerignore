@@ -1,0 +1,22 @@
+# Docker build ignore
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+.git/
+.gitignore
+.idea/
+node_modules/
+data/
+.superpowers/
+.claude/
+docs/
+tests/
+.oxlintrc.json
+.dev/
+web/node_modules/
+web/dist/
